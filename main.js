@@ -314,7 +314,7 @@ class SmartifyQuotesModule extends PluginModule {
         this.plugin.registerEvent(
             this.app.workspace.on('layout-change', () => {
                 this.addButtonToExistingTabs();
-            });
+            })
         );
     }
     
@@ -432,9 +432,9 @@ class SmartifyQuotesModule extends PluginModule {
         
         // Convert single quotes/apostrophes
         // Handle contractions and possessives (apostrophes)
-        result = result.replace(/(\w)'(\w)/g, '$1'$2'); // contractions like don't, it's
-        result = result.replace(/(\w)'s\b/g, '$1's'); // possessives like John's
-        result = result.replace(/(\w)s'\b/g, '$1s''); // plural possessives like cats'
+        result = result.replace(/(\w)'(\w)/g, '$1\'$2'); // contractions like don't, it's
+        result = result.replace(/(\w)'s\b/g, '$1\'s'); // possessives like John's
+        result = result.replace(/(\w)s'\b/g, '$1s\''); // plural possessives like cats'
         
         // Handle single quotes around text
         result = result.replace(/'([^']*?)'/g, (match, content) => {
@@ -446,8 +446,9 @@ class SmartifyQuotesModule extends PluginModule {
         result = result.replace(/(^|\s)'(?=\S)/gm, '$1'');
         
         // Handle closing quotes at end of line or before whitespace/punctuation
-        result = result.replace(/(?<=\S)"(\s|$|[.,!?;:])/gm, '"$1');
-        result = result.replace(/(?<=\S)'(\s|$|[.,!?;:])/gm, ''$1');
+        // Use non-lookbehind approach for better compatibility
+        result = result.replace(/(\S)"(\s|$|[.,!?;:])/gm, '$1"$2');
+        result = result.replace(/(\S)'(\s|$|[.,!?;:])/gm, '$1\'$2');
         
         return result;
     }
