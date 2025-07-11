@@ -308,7 +308,7 @@ class SmartifyQuotesModule extends PluginModule {
         super(plugin);
         this.activeLeaves = new Set();
     }
-    
+
     async onEnable() {
         this.addButtonToExistingTabs();
         this.plugin.registerEvent(
@@ -317,14 +317,14 @@ class SmartifyQuotesModule extends PluginModule {
             })
         );
     }
-    
+
     async onDisable() {
         this.removeAllButtons();
     }
-    
+
     addButtonToExistingTabs() {
         const leaves = this.app.workspace.getLeavesOfType('markdown');
-        
+
         leaves.forEach(leaf => {
             if (!this.activeLeaves.has(leaf)) {
                 this.addButtonToTab(leaf);
@@ -332,61 +332,52 @@ class SmartifyQuotesModule extends PluginModule {
             }
         });
     }
-    
+
     addButtonToTab(leaf) {
         const view = leaf.view;
         if (!view || !view.containerEl) return;
-    
-        // Look for the view actions area (where edit/reader mode toggle is)
+
         const viewActions = view.containerEl.querySelector('.view-actions');
         if (!viewActions) return;
-        
-        // Check if button already exists
+
         if (viewActions.querySelector('.smartify-quotes')) return;
-        
-        // Create the button element. Using 'a' is common for view actions in Obsidian.
+
         const button = document.createElement('a');
-        // 'view-action' is the standard class for styling. We add our own for querying.
         button.className = 'clickable-icon view-action smartify-quotes';
         button.setAttribute('aria-label', 'Convert simple quotes to smart quotes');
-        
-        // Use Obsidian's built-in 'setIcon' function to add the icon.
-        // This avoids manually embedding SVG strings and is the recommended approach.
+
         setIcon(button, 'quote');
-        
+
         button.addEventListener('click', (e) => {
             e.preventDefault();
             e.stopPropagation();
             this.convertToSmartQuotes(view);
         });
-        
-        // Add button to view actions
+
         viewActions.prepend(button);
     }
-    
+
     convertToSmartQuotes(view) {
-        if (!view) return;
-        
-        if (view.getViewType() !== 'markdown') return;
-        
+        if (!view || view.getViewType() !== 'markdown') return;
+
         const editor = view.editor;
         if (!editor) return;
-        
+
         const content = editor.getValue();
         const convertedContent = this.processSmartQuotes(content);
-        
+
         if (content !== convertedContent) {
             editor.setValue(convertedContent);
         }
     }
-    
-    processSmartQuotes(text: string): string {
-        // Split text into parts, preserving code blocks
-        const parts: { text: string; isCodeBlock: boolean }[] = [];
+
+    processSmartQuotes(text) {
+        // Split text into parts to preserve code blocks
+        const parts = [];
         const codeBlockRegex = /```[\s\S]*?```/g;
         let lastIndex = 0;
         let match;
-        
+
         while ((match = codeBlockRegex.exec(text)) !== null) {
             // Add text before code block
             if (match.index > lastIndex) {
@@ -395,16 +386,16 @@ class SmartifyQuotesModule extends PluginModule {
                     isCodeBlock: false
                 });
             }
-            
+
             // Add code block
             parts.push({
                 text: match[0],
                 isCodeBlock: true
             });
-            
+
             lastIndex = match.index + match[0].length;
         }
-        
+
         // Add remaining text after last code block
         if (lastIndex < text.length) {
             parts.push({
@@ -412,7 +403,7 @@ class SmartifyQuotesModule extends PluginModule {
                 isCodeBlock: false
             });
         }
-        
+
         // Process each part
         return parts.map(part => {
             if (part.isCodeBlock) {
@@ -421,38 +412,28 @@ class SmartifyQuotesModule extends PluginModule {
             return this.convertQuotesInText(part.text);
         }).join('');
     }
-    
-    convertQuotesInText(text: string): string {
-        let result = text;
-        
-        // Convert double quotes
-        result = result.replace(/"([^"]*?)"/g, (match, content) => {
-            return `"${content}"`;
-        });
-        
-        // Convert single quotes/apostrophes
-        // Handle contractions and possessives (apostrophes)
-        result = result.replace(/(\w)'(\w)/g, '$1\'$2'); // contractions like don't, it's
-        result = result.replace(/(\w)'s\b/g, '$1\'s'); // possessives like John's
-        result = result.replace(/(\w)s'\b/g, '$1s\''); // plural possessives like cats'
-        
-        // Handle single quotes around text
-        result = result.replace(/'([^']*?)'/g, (match, content) => {
-            return `'${content}'`;
-        });
-        
-        // Handle opening quotes at start of line or after whitespace
-        result = result.replace(/(^|\s)"(?=\S)/gm, '$1"');
-        result = result.replace(/(^|\s)'(?=\S)/gm, '$1'');
-        
-        // Handle closing quotes at end of line or before whitespace/punctuation
-        // Use non-lookbehind approach for better compatibility
-        result = result.replace(/(\S)"(\s|$|[.,!?;:])/gm, '$1"$2');
-        result = result.replace(/(\S)'(\s|$|[.,!?;:])/gm, '$1\'$2');
-        
-        return result;
+
+    /**
+     * Replaces simple quotes with typographic (smart) quotes.
+     * This version uses a series of regular expressions in a specific
+     * order to correctly identify and replace quotes and apostrophes.
+     * @param {string} text The text to process.
+     * @returns {string} The text with smart quotes.
+     */
+    convertQuotesInText(text) {
+        return text
+            // Opening double quotes: “
+            .replace(/(^|\s|--|—|\[|\()"(\S)/g, '$1“$2')
+            // Closing double quotes: ”
+            .replace(/(\S)"/g, '$1”')
+            // Apostrophes in words like "it's" or "don't": ’
+            .replace(/(\w)'(\w)/g, '$1’$2')
+            // Opening single quotes: ‘
+            .replace(/(^|\s|--|—|\[|\()'(\S)/g, '$1‘$2')
+            // Any remaining single quotes are closing ones or possessives: ’
+            .replace(/'/g, '’');
     }
-    
+
     removeAllButtons() {
         const buttons = document.querySelectorAll('.smartify-quotes');
         buttons.forEach(button => button.remove());
