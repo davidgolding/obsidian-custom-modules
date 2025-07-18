@@ -5,7 +5,8 @@ const { Plugin, MarkdownView, WorkspaceLeaf, Setting, PluginSettingTab, setIcon 
 const DEFAULT_SETTINGS = {
     bracketLinkFix: true,
     whiteCanvasMode: true,
-    smartifyQuotes: true
+    smartifyQuotes: true,
+    bulkCreate: true
 };
 
 // Debounce function
@@ -441,6 +442,189 @@ class SmartifyQuotesModule extends PluginModule {
     }
 }
 
+// Bulk Create Module
+class BulkCreateModule extends PluginModule {
+    constructor(plugin) {
+        super(plugin);
+        this.activeLeaves = new Set();
+    }
+
+    async onEnable() {
+        this.addButtonToExistingTabs();
+        this.plugin.registerEvent(
+            this.app.workspace.on('layout-change', () => {
+                this.addButtonToExistingTabs();
+            })
+        );
+    }
+
+    async onDisable() {
+        this.removeAllButtons();
+    }
+
+    addButtonToExistingTabs() {
+        const leaves = this.app.workspace.getLeavesOfType('markdown');
+
+        leaves.forEach(leaf => {
+            if (!this.activeLeaves.has(leaf)) {
+                this.addButtonToTab(leaf);
+                this.activeLeaves.add(leaf);
+            }
+        });
+    }
+
+    addButtonToTab(leaf) {
+        const view = leaf.view;
+        if (!view || !view.containerEl) return;
+
+        const viewActions = view.containerEl.querySelector('.view-actions');
+        if (!viewActions) return;
+
+        if (viewActions.querySelector('.bulk-create')) return;
+
+        const button = document.createElement('a');
+        button.className = 'clickable-icon view-action bulk-create';
+        button.setAttribute('aria-label', 'Create new notes from any inactive links.');
+
+        setIcon(button, 'file-stack');
+
+        button.addEventListener('click', (e) => {
+            e.preventDefault();
+            e.stopPropagation();
+            this.bulkCreateNotes(view);
+            // Refresh the file explorer to show new files
+            this.app.workspace.getLeavesOfType('file-explorer').forEach(leaf => {
+                if (leaf.view && leaf.view.requestSort) {
+                    leaf.view.requestSort();
+                }
+            });
+            // Trigger a metadata cache refresh
+            this.app.metadataCache.trigger('changed');
+        });
+
+        viewActions.prepend(button);
+    }
+
+    bulkCreateNotes(view) {
+        if (!view || view.getViewType() !== 'markdown') return;
+
+        const editor = view.editor;
+        if (!editor) return;
+
+        const content = editor.getValue();
+
+       try {
+           const result = await this.processBulkCreate(content);
+           this.app.workspace.trigger('file-menu');
+       } catch (error) {
+           console.error('Error in bulk create operation:', error);
+       }
+    }
+    
+    async processBulkCreate(content) {
+        // Regular expression to match Obsidian-style links [[Link Text]] or [[Link Text|Display Text]]
+        const linkRegex = /\[\[([^\]|]+)(?:\|[^\]]+)?\]\]/g;
+        const matches = content.matchAll(linkRegex);
+        
+        const createdFiles = [];
+        const skippedFiles = [];
+        
+        for (const match of matches) {
+            const linkText = match[1].trim();
+            
+            // Skip if linkText is empty
+            if (!linkText) continue;
+            
+            // Check if the file already exists
+            const existingFile = this.app.metadataCache.getFirstLinkpathDest(linkText, '');
+            
+            if (!existingFile) {
+                try {
+                    // Get the file path for the new note
+                    const filePath = await this.getNewNotePath(linkText);
+                    
+                    // Create the empty note
+                    await this.app.vault.create(filePath, '');
+                    
+                    createdFiles.push(linkText);
+                } catch (error) {
+                    console.error(`Failed to create note for link: ${linkText}`, error);
+                    skippedFiles.push(linkText);
+                }
+            }
+        }
+        
+        // Optional: Show a notice to the user about what was created
+        if (createdFiles.length > 0) {
+            new Notice(`Created ${createdFiles.length} new note(s): ${createdFiles.join(', ')}`);
+        }
+        
+        if (skippedFiles.length > 0) {
+            new Notice(`Failed to create ${skippedFiles.length} note(s): ${skippedFiles.join(', ')}`);
+        }
+        
+        if (createdFiles.length === 0 && skippedFiles.length === 0) {
+            new Notice('No inactive links found to create.');
+        }
+    }
+    
+    async getNewNotePath(linkText) {
+        // Get the default location for new files from Obsidian's settings
+        const newFileLocation = this.app.vault.getConfig('newFileLocation') || 'root';
+        const newFileFolderPath = this.app.vault.getConfig('newFileFolderPath') || '';
+        
+        let folderPath = '';
+        
+        // Determine the folder path based on Obsidian's settings
+        switch (newFileLocation) {
+            case 'current':
+                // Same folder as current file
+                const activeFile = this.app.workspace.getActiveFile();
+                if (activeFile) {
+                    folderPath = activeFile.parent?.path || '';
+                }
+                break;
+            case 'folder':
+                // Specific folder set by user
+                folderPath = newFileFolderPath;
+                break;
+            case 'root':
+            default:
+                // Root of vault
+                folderPath = '';
+                break;
+        }
+        
+        // Ensure the folder exists
+        if (folderPath && !await this.app.vault.adapter.exists(folderPath)) {
+            await this.app.vault.createFolder(folderPath);
+        }
+        
+        // Construct the full file path
+        const fileName = `${linkText}.md`;
+        const fullPath = folderPath ? `${folderPath}/${fileName}` : fileName;
+        
+        // Handle potential file name conflicts
+        let finalPath = fullPath;
+        let counter = 1;
+        
+        while (await this.app.vault.adapter.exists(finalPath)) {
+            const baseName = linkText;
+            const conflictFileName = `${baseName} ${counter}.md`;
+            finalPath = folderPath ? `${folderPath}/${conflictFileName}` : conflictFileName;
+            counter++;
+        }
+        
+        return finalPath;
+    }
+
+    removeAllButtons() {
+        const buttons = document.querySelectorAll('.smartify-quotes');
+        buttons.forEach(button => button.remove());
+        this.activeLeaves.clear();
+    }
+}
+
 // Settings Tab
 class CustomModulesSettingTab extends PluginSettingTab {
     constructor(app, plugin) {
@@ -492,6 +676,19 @@ class CustomModulesSettingTab extends PluginSettingTab {
                     await this.plugin.toggleModule('smartifyQuotes', value);
                 })
             );
+        
+        // Bulk Create Setting
+        new Setting(containerEl)
+            .setName('Bulk Create Notes')
+            .setDesc('Detect inactive links within a note and create new notes of them')
+            .addToggle(toggle => toggle
+                .setValue(this.plugin.settings.bulkCreate)
+                .onChange(async (value) => {
+                    this.plugin.settings.bulkCreate = value;
+                    await this.plugin.saveSettings();
+                    await this.plugin.toggleModule('bulkCreate', value);
+                })
+            );
     }
 }
 
@@ -511,6 +708,7 @@ class CustomModulesPlugin extends Plugin {
         this.modules.bracketLinkFix = new BracketLinkFixModule(this);
         this.modules.whiteCanvasMode = new WhiteCanvasModeModule(this);
         this.modules.smartifyQuotes = new SmartifyQuotesModule(this);
+        this.modules.bulkCreate = new BulkCreateModule(this);
 
         // Add settings tab
         this.addSettingTab(new CustomModulesSettingTab(this.app, this));
