@@ -1,7 +1,7 @@
 {
     "id": "obsidian-custom-modules",
     "name": "Custom Modules",
-    "version": "1.1.0",
+    "version": "1.2.0",
     "minAppVersion": "1.0.0",
     "description": "A plugin for creating customized features as individual modules. Intended for developers testing a narrower feature or function before assembling a dedicated plugin.",
     "author": "David Golding",
