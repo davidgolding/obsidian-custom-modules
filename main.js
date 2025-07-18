@@ -498,6 +498,10 @@ class BulkCreateModule extends PluginModule {
                     leaf.view.requestSort();
                 }
             });
+            const activeLeaf = this.app.workspace.activeLeaf;
+            if (activeLeaf && activeLeaf.view.editor) {
+                activeLeaf.view.editor.refresh();
+            }
             // Trigger a metadata cache refresh
             this.app.metadataCache.trigger('changed');
         });
@@ -505,20 +509,14 @@ class BulkCreateModule extends PluginModule {
         viewActions.prepend(button);
     }
 
-    bulkCreateNotes(view) {
+    async bulkCreateNotes(view) {
         if (!view || view.getViewType() !== 'markdown') return;
 
         const editor = view.editor;
         if (!editor) return;
 
         const content = editor.getValue();
-
-       try {
-           const result = await this.processBulkCreate(content);
-           this.app.workspace.trigger('file-menu');
-       } catch (error) {
-           console.error('Error in bulk create operation:', error);
-       }
+        const result = await this.processBulkCreate(content);
     }
     
     async processBulkCreate(content) {
