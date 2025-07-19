@@ -1,5 +1,6 @@
 {
   "bracketLinkFix": true,
   "whiteCanvasMode": true,
-  "smartifyQuotes": true
+  "smartifyQuotes": true,
+  "bulkCreate": true
 }

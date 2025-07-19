@@ -16,6 +16,8 @@ A modular plugin that allows for personally crafted elements to be implemented s
 - **Current Modules**
     - Bracket Link Fix: Makes sure Obsidian doesn't style regular brackets like external links.
     - White Canvas Mode: Allows the note canvas to have a white background while the rest of the interface remains in dark mode.
+    - Smartify Quotes: Provides a button that detects straight quotes in the active note and converts them to proper apostrophes and quotation marks.
+    - Bulk Create Notes: Detects inactive internal links in the active note and creates new note files for them.
 
 ## How to Add New Features
 
@@ -45,6 +47,8 @@ this.modules.myNewFeature = new MyNewFeatureModule(this);
 const DEFAULT_SETTINGS = {
     bracketLinkFix: true,
     whiteCanvasMode: true,
+    smartifyQuotes: true,
+    bulkCreate: true,
     myNewFeature: false  // Add this
 };
 ```
@@ -68,9 +72,9 @@ new Setting(containerEl)
 
 ## Usage
 
-1. Replace your existing plugin files with these new versions
+1. Edit `main.js` to build your custom module functions
 2. Restart Obsidian
-3. Go to Settings → Custom Modules to enable/disable features
+3. Go to Settings → Custom Modules to enable/disable the new module
 4. Each feature can be toggled independently in real-time
 
 The architecture is now set up for easy expansion of future personal productivity features.
