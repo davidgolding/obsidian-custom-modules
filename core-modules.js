@@ -486,8 +486,9 @@ class BulkCreateModule extends getPluginModule() {
             if (!existingFile) {
                 try {
                     const filePath = await this.getNewNotePath(linkText);
-                    // Create the empty note
+                    
                     await this.app.vault.create(filePath, '');
+                    
                     createdFiles.push(linkText);
                 } catch (error) {
                     console.error(`Failed to create note for link: ${linkText}`, error);
@@ -495,7 +496,7 @@ class BulkCreateModule extends getPluginModule() {
                 }
             }
         }
-        // Optional: Show a notice to the user about what was created
+        
         if (createdFiles.length > 0) {
             new Notice(`Created ${createdFiles.length} new note(s): ${createdFiles.join(', ')}`);
         }
@@ -510,42 +511,34 @@ class BulkCreateModule extends getPluginModule() {
     }
     
     async getNewNotePath(linkText) {
-        // Get the default location for new files from Obsidian's settings
         const newFileLocation = this.app.vault.getConfig('newFileLocation') || 'root';
         const newFileFolderPath = this.app.vault.getConfig('newFileFolderPath') || '';
         
         let folderPath = '';
         
-        // Determine the folder path based on Obsidian's settings
         switch (newFileLocation) {
             case 'current':
-                // Same folder as current file
                 const activeFile = this.app.workspace.getActiveFile();
                 if (activeFile) {
                     folderPath = activeFile.parent?.path || '';
                 }
                 break;
             case 'folder':
-                // Specific folder set by user
                 folderPath = newFileFolderPath;
                 break;
             case 'root':
             default:
-                // Root of vault
                 folderPath = '';
                 break;
         }
         
-        // Ensure the folder exists
         if (folderPath && !await this.app.vault.adapter.exists(folderPath)) {
             await this.app.vault.createFolder(folderPath);
         }
         
-        // Construct the full file path
         const fileName = `${linkText}.md`;
         const fullPath = folderPath ? `${folderPath}/${fileName}` : fileName;
         
-        // Handle potential file name conflicts
         let finalPath = fullPath;
         let counter = 1;
         
@@ -558,15 +551,20 @@ class BulkCreateModule extends getPluginModule() {
         
         return finalPath;
     }
-    
+
     removeAllButtons() {
-        const buttons = document.querySelectorAll('.smartify-quotes');
+        const buttons = document.querySelectorAll('.bulk-create');
         buttons.forEach(button => button.remove());
         this.activeLeaves.clear();
     }
 }
 
-module.exports = BracketLinkFixModule;
-module.exports = WhiteCanvasModeModule;
-module.exports = SmartifyQuotesModule;
-module.exports = BulkCreateModule;
+// Export all core modules
+module.exports = {
+    modules: [
+        BracketLinkFixModule,
+        WhiteCanvasModeModule,
+        SmartifyQuotesModule,
+        BulkCreateModule
+    ]
+};
