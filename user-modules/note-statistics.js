@@ -1,7 +1,6 @@
 // user-modules/note-statistics.js
 // Example of a more advanced user module with settings
 
-const { PluginModule } = window.CustomModulesAPI;
 const { Notice, MarkdownView, Setting } = obsidian;
 
 class NoteStatisticsModule extends PluginModule {

@@ -6,7 +6,12 @@
     "core-bulk-create": true,
     "note-statistics": false
   },
-  "moduleSettings": {},
+  "moduleSettings": {
+    "note-statistics": {
+      "wordsPerMinute": 200
+    }
+  },
+  "userModulesFolder": "Sources/Attachments/Scripts",
   "bracketLinkFix": true,
   "whiteCanvasMode": true,
   "smartifyQuotes": true,

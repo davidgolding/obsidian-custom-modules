@@ -1,9 +1,6 @@
 // core-modules.js - Built-in modules that ship with the plugin
-// The 'obsidian' object is now injected by the module loader.
+// The 'obsidian' and 'PluginModule' objects are now injected by the module loader.
 const { MarkdownView, Notice, setIcon, Setting } = obsidian;
-
-// Get the base class from the main plugin
-const getPluginModule = () => window.CustomModulesAPI?.PluginModule || class {};
 
 // Utility: Debounce function
 function debounce(func, wait) {
@@ -19,7 +16,7 @@ function debounce(func, wait) {
 }
 
 // Bracket Link Fix Module
-class BracketLinkFixModule extends getPluginModule() {
+class BracketLinkFixModule extends PluginModule {
     constructor(plugin) {
         super(plugin);
         this.id = 'core-bracket-link-fix';
@@ -145,7 +142,7 @@ class BracketLinkFixModule extends getPluginModule() {
 }
 
 // White Canvas Mode Module
-class WhiteCanvasModeModule extends getPluginModule() {
+class WhiteCanvasModeModule extends PluginModule {
     constructor(plugin) {
         super(plugin);
         this.id = 'core-white-canvas-mode';
@@ -265,7 +262,7 @@ body .view-content.light-mode-active .markdown-source-view.mod-cm6 .cm-content {
 }
 
 // Smartify Quotes Module
-class SmartifyQuotesModule extends getPluginModule() {
+class SmartifyQuotesModule extends PluginModule {
     constructor(plugin) {
         super(plugin);
         this.id = 'core-smartify-quotes';
@@ -390,7 +387,7 @@ class SmartifyQuotesModule extends getPluginModule() {
 }
 
 // Bulk Create Module
-class BulkCreateModule extends getPluginModule() {
+class BulkCreateModule extends PluginModule {
     constructor(plugin) {
         super(plugin);
         this.id = 'core-bulk-create';

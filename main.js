@@ -6,7 +6,8 @@ const path = require('path');
 // Default settings
 const DEFAULT_SETTINGS = {
     enabledModules: {},
-    moduleSettings: {}
+    moduleSettings: {},
+    userModulesFolder: ''
 };
 
 // Base class for all plugin modules (exported for user modules)
@@ -133,6 +134,19 @@ class CustomModulesSettingTab extends PluginSettingTab {
         containerEl.empty();
 
         containerEl.createEl('h2', { text: 'Custom Modules Settings' });
+        
+        new Setting(containerEl)
+        .setName('User modules folder')
+        .setDesc('Path to your folder for user-created modules, relative to the vault root. Leave blank to use the default "user-modules" folder inside the plugin directory.')
+        .addText(text => text
+            .setPlaceholder('Example: scripts/modules')
+            .setValue(this.plugin.settings.userModulesFolder)
+            .onChange(async (value) => {
+                this.plugin.settings.userModulesFolder = value.trim();
+                await this.plugin.saveSettings();
+            }));
+        
+        containerEl.createEl('hr');
 
         // Core modules section
         const coreSection = containerEl.createEl('div', { cls: 'custom-modules-core-section' });
@@ -180,7 +194,7 @@ class CustomModulesSettingTab extends PluginSettingTab {
         }
 
         if (!hasUserModules) {
-            userSection.createEl('p', { text: 'No user modules found. Add custom modules to the "user-modules" folder in the plugin directory.', cls: 'setting-item-description' });
+            userSection.createEl('p', { text: 'No user modules found. Add custom modules to the "user-modules" folder in the plugin directory or the path you\'ve entered in "User modules folder."', cls: 'setting-item-description' });
         }
 
         // Add information about creating custom modules
@@ -188,14 +202,14 @@ class CustomModulesSettingTab extends PluginSettingTab {
         const infoSection = containerEl.createEl('div', { cls: 'custom-modules-info-section' });
         infoSection.createEl('h3', { text: 'Creating Custom Modules' });
         infoSection.createEl('p', { 
-            text: 'To create custom modules, add JavaScript files to the "user-modules" folder in this plugin\'s directory. Each module should export a class extending PluginModule.',
+            text: 'To create custom modules, add JavaScript files to the "user-modules" folder in this plugin\'s directory or in the path you\'ve entered in "User modules folder." Each module should export a class extending PluginModule.',
             cls: 'setting-item-description' 
         });
 
         // Add reload button
         new Setting(infoSection)
             .setName('Reload User Modules')
-            .setDesc('Reload all user modules from the user-modules folder')
+            .setDesc('Reload all user modules from the user modules folder')
             .addButton(button => button
                 .setButtonText('Reload')
                 .onClick(async () => {
@@ -213,24 +227,23 @@ class CustomModulesPlugin extends Plugin {
         super(...arguments);
         this.settings = DEFAULT_SETTINGS;
         this.registry = new ModuleRegistry(this);
-        this.userModulesPath = null;
     }
 
     async onload() {
         // Set up paths
         const adapter = this.app.vault.adapter;
-        const pluginDir = this.manifest.dir;
-        this.userModulesPath = path.join(pluginDir, 'user-modules');
+        
+        //Load settings first, so we know the custom user-modules path
+        await this.loadSettings();
+        
+        const userModulesPath = this.getUserModulesPath();
 
         // Ensure user-modules directory exists
-        if (!await adapter.exists(this.userModulesPath)) {
-            await adapter.mkdir(this.userModulesPath);
+        if (!await adapter.exists(userModulesPath)) {
+            await adapter.mkdir(userModulesPath);
             // Create a sample module file
             await this.createSampleModule();
         }
-
-        // Load settings
-        await this.loadSettings();
 
         // Load core modules
         await this.loadCoreModules();
@@ -259,6 +272,15 @@ class CustomModulesPlugin extends Plugin {
         
         // Clean up API
         delete window.CustomModulesAPI;
+    }
+    
+    getUserModulesPath() {
+        if (this.settings.userModulesFolder) {
+            // Use the user-defined path if it's set
+            return this.settings.userModulesFolder;
+        }
+        // Fallback to the default location inside the plugin folder
+        return path.join(this.manifest.dir, 'user-modules');
     }
     
     /**
@@ -291,8 +313,8 @@ class CustomModulesPlugin extends Plugin {
             const coreModulesPath = path.join(this.manifest.dir, 'core-modules.js');
             if (await this.app.vault.adapter.exists(coreModulesPath)) {
                 const coreModulesContent = await this.app.vault.adapter.read(coreModulesPath);
-                // Pass the obsidian object as context
-                const coreModules = this.executeModuleCode(coreModulesContent, coreModulesPath, { obsidian });
+                // Add PluginModule to the context
+                const coreModules = this.executeModuleCode(coreModulesContent, coreModulesPath, { obsidian, PluginModule });
                 
                 if (coreModules && coreModules.modules && Array.isArray(coreModules.modules)) {
                     for (const ModuleClass of coreModules.modules) {
@@ -314,18 +336,19 @@ class CustomModulesPlugin extends Plugin {
     
         try {
             const adapter = this.app.vault.adapter;
+            const userModulesPath = this.getUserModulesPath();
             
-            if (!await adapter.exists(this.userModulesPath)) {
+            if (!await adapter.exists(userModulesPath)) {
                 return; // Folder doesn't exist, nothing to load
             }
             
-            const files = await adapter.list(this.userModulesPath);
+            const files = await adapter.list(userModulesPath);
             const jsFiles = files.files.filter(f => f.endsWith('.js'));
     
             for (const file of jsFiles) {
                 try {
                     const moduleContent = await adapter.read(file);
-                    const userModule = this.executeModuleCode(moduleContent, file, { obsidian });
+                    const userModule = this.executeModuleCode(moduleContent, file, { obsidian, PluginModule });
     
                     if (!userModule) continue; // Skip if execution failed
     
@@ -350,9 +373,7 @@ class CustomModulesPlugin extends Plugin {
     async createSampleModule() {
         const sampleCode = `// Example Custom Module
 // This file demonstrates how to create a custom module for the Custom Modules Plugin
-
-// Get the PluginModule base class from the global API
-const { PluginModule } = window.CustomModulesAPI;
+const { Notice, Setting } = obsidian;
 
 class ExampleModule extends PluginModule {
     constructor(plugin) {
@@ -406,7 +427,8 @@ class ExampleModule extends PluginModule {
 module.exports = ExampleModule;
 `;
 
-        const examplePath = path.join(this.userModulesPath, 'example-module.js');
+        const userModulesPath = this.getUserModulesPath();
+        const examplePath = path.join(userModulesPath, 'example-module.js');
         await this.app.vault.adapter.write(examplePath, sampleCode);
     }
 
