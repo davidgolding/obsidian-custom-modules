@@ -1,5 +1,6 @@
 // main.js - Core Plugin Framework
 const { Plugin, MarkdownView, WorkspaceLeaf, Setting, PluginSettingTab, setIcon, Notice } = require('obsidian');
+const obsidian = require('obsidian');
 const path = require('path');
 
 // Default settings
@@ -259,17 +260,41 @@ class CustomModulesPlugin extends Plugin {
         // Clean up API
         delete window.CustomModulesAPI;
     }
+    
+    /**
+     * Executes module code from a string by wrapping it in a function
+     * to simulate a CommonJS environment (provides module, exports).
+     * @param {string} code The JavaScript code to execute.
+     * @param {string} filepath The path of the file for error reporting.
+     * @returns {any} The value of module.exports from the executed code.
+     */
+    executeModuleCode(code, filepath, context = {}) {
+        try {
+            const module = { exports: {} };
+            const exports = module.exports;
+            
+            const contextKeys = Object.keys(context);
+            const contextValues = Object.values(context);
+    
+            const fn = new Function('module', 'exports', ...contextKeys, code);
+            fn.call(module.exports, module, exports, ...contextValues);
+            return module.exports;
+        } catch (error) {
+            console.error(`Error executing code from ${filepath}:`, error);
+            new Notice(`Error in module: ${path.basename(filepath)}`);
+            return null;
+        }
+    }
 
     async loadCoreModules() {
-        // Import core modules that ship with the plugin
         try {
-            // Check if core-modules.js exists
             const coreModulesPath = path.join(this.manifest.dir, 'core-modules.js');
             if (await this.app.vault.adapter.exists(coreModulesPath)) {
-                // Dynamic import of core modules
-                const coreModules = require(coreModulesPath);
+                const coreModulesContent = await this.app.vault.adapter.read(coreModulesPath);
+                // Pass the obsidian object as context
+                const coreModules = this.executeModuleCode(coreModulesContent, coreModulesPath, { obsidian });
                 
-                if (coreModules.modules && Array.isArray(coreModules.modules)) {
+                if (coreModules && coreModules.modules && Array.isArray(coreModules.modules)) {
                     for (const ModuleClass of coreModules.modules) {
                         this.registry.register(ModuleClass);
                     }
@@ -279,44 +304,42 @@ class CustomModulesPlugin extends Plugin {
             console.error('Failed to load core modules:', error);
         }
     }
-
+    
     async loadUserModules() {
         // Clear existing user modules
         const userModuleIds = Array.from(this.registry.modules.keys()).filter(id => !id.startsWith('core-'));
         for (const id of userModuleIds) {
             this.registry.unregister(id);
         }
-
+    
         try {
             const adapter = this.app.vault.adapter;
             
-            // List all .js files in user-modules directory
+            if (!await adapter.exists(this.userModulesPath)) {
+                return; // Folder doesn't exist, nothing to load
+            }
+            
             const files = await adapter.list(this.userModulesPath);
             const jsFiles = files.files.filter(f => f.endsWith('.js'));
-
+    
             for (const file of jsFiles) {
                 try {
-                    // Clear require cache to allow reloading
-                    const fullPath = path.join(adapter.basePath, file);
-                    delete require.cache[require.resolve(fullPath)];
-                    
-                    // Load the module
-                    const userModule = require(fullPath);
-                    
+                    const moduleContent = await adapter.read(file);
+                    const userModule = this.executeModuleCode(moduleContent, file, { obsidian });
+    
+                    if (!userModule) continue; // Skip if execution failed
+    
                     // Register the module class
                     if (userModule.default) {
-                        // ES6 default export
                         this.registry.register(userModule.default);
                     } else if (typeof userModule === 'function') {
-                        // Direct function export
                         this.registry.register(userModule);
                     } else if (userModule.module) {
-                        // Named export
                         this.registry.register(userModule.module);
                     }
                 } catch (error) {
                     console.error(`Failed to load user module ${file}:`, error);
-                    new Notice(`Failed to load module: ${file}`);
+                    new Notice(`Failed to load module: ${path.basename(file)}`);
                 }
             }
         } catch (error) {

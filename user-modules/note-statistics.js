@@ -2,7 +2,7 @@
 // Example of a more advanced user module with settings
 
 const { PluginModule } = window.CustomModulesAPI;
-const { Notice, MarkdownView, Setting } = require('obsidian');
+const { Notice, MarkdownView, Setting } = obsidian;
 
 class NoteStatisticsModule extends PluginModule {
     constructor(plugin) {

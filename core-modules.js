@@ -1,5 +1,6 @@
 // core-modules.js - Built-in modules that ship with the plugin
-const { MarkdownView, Notice, setIcon, Setting } = require('obsidian');
+// The 'obsidian' object is now injected by the module loader.
+const { MarkdownView, Notice, setIcon, Setting } = obsidian;
 
 // Get the base class from the main plugin
 const getPluginModule = () => window.CustomModulesAPI?.PluginModule || class {};
@@ -374,11 +375,11 @@ class SmartifyQuotesModule extends getPluginModule() {
 
     convertQuotesInText(text) {
         return text
-            .replace(/(^|\s|--|—|\[|\()"(\S)/g, '$1"$2')
-            .replace(/(\S)"/g, '$1"')
-            .replace(/(\w)'(\w)/g, '$1'$2')
-            .replace(/(^|\s|--|—|\[|\()'(\S)/g, '$1'$2')
-            .replace(/'/g, ''');
+            .replace(/(^|\s|--|—|\[|\()"(\S)/g, '$1“$2') // Opening double quote
+            .replace(/(\S)"/g, '$1”') // Closing double quote
+            .replace(/(\w)'(\w)/g, '$1’$2') // Apostrophe within a word
+            .replace(/(^|\s|--|—|\[|\()'(\S)/g, '$1‘$2') // Opening single quote
+            .replace(/'/g, '’'); // Closing single quote / apostrophe
     }
 
     removeAllButtons() {
