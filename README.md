@@ -1,8 +1,8 @@
-# Custom Modules Plugin - Developer Guide
+# Custom Modules Plugin
 
-## Overview
+A modular plugin that allows for personally crafted elements to be implemented similarly to core plugins. Intended for developers wanting to quick-test a function or narrow feature without assembling a dedicated plugin architecture around. Also useful for teams with internal customization needs where this one plugin may be installed and modules made optional for individual team members.
 
-The Custom Modules Plugin provides a framework for creating and managing custom functionality in Obsidian. It separates core modules (that ship with the plugin) from user modules (that you create), ensuring your custom modules are never overwritten during plugin updates.
+This plugin separates its core modules (that ship with the plugin) from user modules (that you create), ensuring your custom modules are never overwritten during plugin updates.
 
 ## File Structure
 
@@ -10,25 +10,29 @@ The Custom Modules Plugin provides a framework for creating and managing custom 
 your-vault/.obsidian/plugins/custom-modules/
 ├── main.js                 # Core plugin framework (DO NOT EDIT)
 ├── core-modules.js         # Built-in modules (DO NOT EDIT)
-├── manifest.json          # Plugin manifest (DO NOT EDIT)
-├── user-modules/          # Your custom modules go here
-│   ├── example-module.js  # Sample module (can be deleted)
-│   └── your-module.js     # Your custom modules
-└── data.json             # Plugin settings (auto-generated)
+├── manifest.json           # Plugin manifest (DO NOT EDIT)
+├── user-modules/           # Your custom modules go here
+│   ├── example-module.js   # Sample module (can be deleted)
+│   └── your-module.js      # Your custom modules
+└── data.json               # Plugin settings (auto-generated)
 ```
+
+## Custom Modules Folder Location
+
+You may define a folder within your vault for providing customized modules. Enter the relative path to this folder in the "User modules folder" setting.
+
+The plugin defaults to the `user-modules` folder within itself for demo purposes. Any modules you store there may be replaced on a future update, so exercise caution leaving them there.
 
 ## Creating Custom Modules
 
 ### Basic Module Structure
 
-Create a new `.js` file in the `user-modules` folder:
+Create a new `.js` file in the user modules folder:
 
 ```javascript
 // user-modules/my-custom-module.js
 
-// Access the API
-const { PluginModule } = window.CustomModulesAPI;
-const { Notice } = require('obsidian');
+const { Notice } = obsidian;
 
 class MyCustomModule extends PluginModule {
     constructor(plugin) {
@@ -40,7 +44,6 @@ class MyCustomModule extends PluginModule {
 
     async onEnable() {
         // Called when module is enabled
-        console.log('Module enabled!');
         
         // Add commands, events, UI elements, etc.
         this.plugin.addCommand({
@@ -55,7 +58,6 @@ class MyCustomModule extends PluginModule {
     async onDisable() {
         // Called when module is disabled
         // Clean up resources, remove UI elements, etc.
-        console.log('Module disabled!');
     }
 }
 
@@ -66,6 +68,8 @@ module.exports = MyCustomModule;
 ### Module with Settings
 
 ```javascript
+const { Notice, Setting } = obsidian;
+
 class AdvancedModule extends PluginModule {
     constructor(plugin) {
         super(plugin);
@@ -159,7 +163,7 @@ this.plugin.addRibbonIcon('dice', 'Tooltip', () => {
 
 ## Module Lifecycle
 
-1. **Registration**: When the plugin loads, it scans the `user-modules` folder and registers all modules
+1. **Registration**: When the plugin loads, it scans the user modules folder and registers all modules
 2. **Initialization**: Modules are initialized based on saved settings
 3. **Enable**: When enabled, the module's `onEnable()` method is called
 4. **Running**: Module functionality is active
@@ -168,13 +172,17 @@ this.plugin.addRibbonIcon('dice', 'Tooltip', () => {
 ## Best Practices
 
 ### 1. Unique IDs
+
 Always use unique module IDs to avoid conflicts:
+
 ```javascript
 this.id = 'your-username-module-name';
 ```
 
 ### 2. Clean Up Resources
+
 Always clean up in `onDisable()`:
+
 ```javascript
 async onDisable() {
     // Remove UI elements
@@ -189,7 +197,9 @@ async onDisable() {
 ```
 
 ### 3. Error Handling
+
 Wrap risky operations in try-catch:
+
 ```javascript
 async onEnable() {
     try {
@@ -202,6 +212,7 @@ async onEnable() {
 ```
 
 ### 4. Performance
+
 - Debounce frequent operations
 - Use observers instead of polling
 - Clean up event listeners when disabled
@@ -209,39 +220,36 @@ async onEnable() {
 ## Updating the Plugin
 
 When the main plugin is updated:
-1. Your `user-modules` folder is preserved
+
+1. Your user modules folder in the vault is preserved
 2. Your module settings are preserved
-3. Only `main.js` and `core-modules.js` are updated
+3. Only `main.js` and `core-modules.js` should be updated in any future releases
 
 ## Troubleshooting
 
 ### Module Not Appearing
-- Ensure the file is in the `user-modules` folder
-- Check for JavaScript syntax errors in the console (Ctrl+Shift+I)
+
+- Ensure the file is in the user modules folder as defined in the plugin settings
+- Check for JavaScript syntax errors in the console
 - Try the "Reload User Modules" button in settings
 
 ### Module Crashes
+
 - Check the developer console for errors
 - Ensure all required Obsidian modules are imported
 - Verify the module exports correctly
 
 ### Settings Not Saving
+
 - Make sure to use `this.saveSettings()` method
 - Settings are stored per module ID, so keep IDs consistent
 
 ## Examples
 
 The plugin includes several examples:
+
 1. `example-module.js` - Basic module structure
-2. `note-statistics.js` - Advanced module with settings and status bar
+2. `user-modules/note-statistics.js` - Advanced module with settings and status bar
 3. Core modules in `core-modules.js` - Reference implementations
 
-## Support
-
-For issues or questions:
-1. Check the developer console for errors
-2. Review the example modules
-3. Ensure you're using the latest plugin version
-4. Report issues on the plugin's GitHub repository
-
-Remember: Never edit `main.js` or `core-modules.js` directly - these files will be overwritten during updates!
+**Remember: Never edit `main.js` or `core-modules.js` directly - these files will be overwritten during updates!**
