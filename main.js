@@ -1,6 +1,5 @@
 // main.js - Core Plugin Framework
 const { Plugin, MarkdownView, WorkspaceLeaf, Setting, PluginSettingTab, setIcon, Notice } = require('obsidian');
-const obsidian = require('obsidian');
 const path = require('path');
 
 // Default settings
@@ -66,14 +65,14 @@ class ModuleRegistry {
 
     register(moduleClass, options = {}) {
         const module = new moduleClass(this.plugin);
-        
+
         if (options.id) module.id = options.id;
         if (options.name) module.name = options.name;
         if (options.description) module.description = options.description;
-        
+
         this.modules.set(module.id, module);
         this.moduleOrder.push(module.id);
-        
+
         return module;
     }
 
@@ -134,7 +133,7 @@ class CustomModulesSettingTab extends PluginSettingTab {
         containerEl.empty();
 
         containerEl.createEl('h2', { text: 'Custom Modules Settings' });
-        
+
         new Setting(containerEl)
         .setName('User modules folder')
         .setDesc('Path to your folder for user-created modules, relative to the vault root. Leave blank to use the default "user-modules" folder inside the plugin directory.')
@@ -145,13 +144,13 @@ class CustomModulesSettingTab extends PluginSettingTab {
                 this.plugin.settings.userModulesFolder = value.trim();
                 await this.plugin.saveSettings();
             }));
-        
+
         containerEl.createEl('hr');
 
         // Core modules section
         const coreSection = containerEl.createEl('div', { cls: 'custom-modules-core-section' });
         coreSection.createEl('h3', { text: 'Core Modules' });
-        
+
         // User modules section
         const userSection = containerEl.createEl('div', { cls: 'custom-modules-user-section' });
         userSection.createEl('h3', { text: 'User Modules' });
@@ -163,12 +162,12 @@ class CustomModulesSettingTab extends PluginSettingTab {
         for (const module of this.plugin.registry.getAllModules()) {
             const isCore = module.id.startsWith('core-');
             const section = isCore ? coreSection : userSection;
-            
+
             if (isCore) hasCoreModules = true;
             else hasUserModules = true;
 
             const moduleContainer = section.createEl('div', { cls: 'custom-module-container' });
-            
+
             // Main toggle for the module
             new Setting(moduleContainer)
                 .setName(module.name)
@@ -201,9 +200,9 @@ class CustomModulesSettingTab extends PluginSettingTab {
         containerEl.createEl('hr');
         const infoSection = containerEl.createEl('div', { cls: 'custom-modules-info-section' });
         infoSection.createEl('h3', { text: 'Creating Custom Modules' });
-        infoSection.createEl('p', { 
+        infoSection.createEl('p', {
             text: 'To create custom modules, add JavaScript files to the "user-modules" folder in this plugin\'s directory or in the path you\'ve entered in "User modules folder." Each module should export a class extending PluginModule.',
-            cls: 'setting-item-description' 
+            cls: 'setting-item-description'
         });
 
         // Add reload button
@@ -227,15 +226,17 @@ class CustomModulesPlugin extends Plugin {
         super(...arguments);
         this.settings = DEFAULT_SETTINGS;
         this.registry = new ModuleRegistry(this);
+        // Make obsidian available to the plugin instance
+        this.obsidian = require('obsidian');
     }
 
     async onload() {
         // Set up paths
         const adapter = this.app.vault.adapter;
-        
+
         //Load settings first, so we know the custom user-modules path
         await this.loadSettings();
-        
+
         const userModulesPath = this.getUserModulesPath();
 
         // Ensure user-modules directory exists
@@ -269,11 +270,11 @@ class CustomModulesPlugin extends Plugin {
     async onunload() {
         // Disable all modules
         await this.registry.disableAll();
-        
+
         // Clean up API
         delete window.CustomModulesAPI;
     }
-    
+
     getUserModulesPath() {
         if (this.settings.userModulesFolder) {
             // Use the user-defined path if it's set
@@ -282,7 +283,7 @@ class CustomModulesPlugin extends Plugin {
         // Fallback to the default location inside the plugin folder
         return path.join(this.manifest.dir, 'user-modules');
     }
-    
+
     /**
      * Executes module code from a string by wrapping it in a function
      * to simulate a CommonJS environment (provides module, exports).
@@ -294,10 +295,10 @@ class CustomModulesPlugin extends Plugin {
         try {
             const module = { exports: {} };
             const exports = module.exports;
-            
+
             const contextKeys = Object.keys(context);
             const contextValues = Object.values(context);
-    
+
             const fn = new Function('module', 'exports', ...contextKeys, code);
             fn.call(module.exports, module, exports, ...contextValues);
             return module.exports;
@@ -314,8 +315,8 @@ class CustomModulesPlugin extends Plugin {
             if (await this.app.vault.adapter.exists(coreModulesPath)) {
                 const coreModulesContent = await this.app.vault.adapter.read(coreModulesPath);
                 // Add PluginModule to the context
-                const coreModules = this.executeModuleCode(coreModulesContent, coreModulesPath, { obsidian, PluginModule });
-                
+                const coreModules = this.executeModuleCode(coreModulesContent, coreModulesPath, { obsidian: this.obsidian, PluginModule });
+
                 if (coreModules && coreModules.modules && Array.isArray(coreModules.modules)) {
                     for (const ModuleClass of coreModules.modules) {
                         this.registry.register(ModuleClass);
@@ -326,32 +327,32 @@ class CustomModulesPlugin extends Plugin {
             console.error('Failed to load core modules:', error);
         }
     }
-    
+
     async loadUserModules() {
         // Clear existing user modules
         const userModuleIds = Array.from(this.registry.modules.keys()).filter(id => !id.startsWith('core-'));
         for (const id of userModuleIds) {
             this.registry.unregister(id);
         }
-    
+
         try {
             const adapter = this.app.vault.adapter;
             const userModulesPath = this.getUserModulesPath();
-            
+
             if (!await adapter.exists(userModulesPath)) {
                 return; // Folder doesn't exist, nothing to load
             }
-            
+
             const files = await adapter.list(userModulesPath);
             const jsFiles = files.files.filter(f => f.endsWith('.js'));
-    
+
             for (const file of jsFiles) {
                 try {
                     const moduleContent = await adapter.read(file);
-                    const userModule = this.executeModuleCode(moduleContent, file, { obsidian, PluginModule });
-    
+                    const userModule = this.executeModuleCode(moduleContent, file, { obsidian: this.obsidian, PluginModule });
+
                     if (!userModule) continue; // Skip if execution failed
-    
+
                     // Register the module class
                     if (userModule.default) {
                         this.registry.register(userModule.default);
@@ -386,7 +387,7 @@ class ExampleModule extends PluginModule {
     async onEnable() {
         // This runs when the module is enabled
         console.log('Example Module enabled!');
-        
+
         // Example: Add a command
         this.plugin.addCommand({
             id: 'example-command',
@@ -400,16 +401,16 @@ class ExampleModule extends PluginModule {
     async onDisable() {
         // This runs when the module is disabled
         console.log('Example Module disabled!');
-        
+
         // Clean up any resources, event listeners, etc.
     }
 
     // Optional: Add custom settings for this module
     addSettings(containerEl) {
         const { Setting } = require('obsidian');
-        
+
         const settings = this.getSettings();
-        
+
         new Setting(containerEl)
             .setName('Example Setting')
             .setDesc('This is an example setting for the module')

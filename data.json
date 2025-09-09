@@ -4,11 +4,12 @@
     "core-white-canvas-mode": true,
     "core-smartify-quotes": true,
     "core-bulk-create": true,
-    "note-statistics": false
+    "note-statistics": true
   },
   "moduleSettings": {
     "note-statistics": {
-      "wordsPerMinute": 200
+      "wordsPerMinute": 200,
+      "showCharCount": false
     }
   },
   "userModulesFolder": "Sources/Attachments/Scripts",
