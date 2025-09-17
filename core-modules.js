@@ -468,7 +468,7 @@ class BulkCreateModule extends PluginModule {
     }
     
     async processBulkCreate(content) {
-        const linkRegex = /\[\[([^\]|]+)(?:\|[^\]]+)?\]\]/g;
+        const linkRegex = /[[^]]+?(?:|[^]]+)?]]/g;
         const matches = content.matchAll(linkRegex);
         
         const createdFiles = [];
@@ -564,5 +564,161 @@ module.exports = {
         WhiteCanvasModeModule,
         SmartifyQuotesModule,
         BulkCreateModule
+    ]
+};
+
+// Dynamic Padding Module
+class DynamicPaddingModule extends PluginModule {
+    constructor(plugin) {
+        super(plugin);
+        this.id = 'core-dynamic-padding';
+        this.name = 'Dynamic Editor Padding';
+        this.description = 'Adds a configurable padding to the bottom of the editor.';
+        this.observers = new WeakMap();
+        this.paddingPercentage = 50;
+    }
+
+    // This extension is registered globally and checks if this module is enabled.
+    createScrollFixExtension(EditorView_class) {
+        const plugin = this.plugin;
+        const moduleId = this.id;
+
+        return EditorView_class.updateListener.of(update => {
+            const module = plugin.registry.getModule(moduleId);
+            if (!module || !module.enabled || !update.docChanged) {
+                return;
+            }
+
+            const view = update.view;
+            const state = update.state;
+            const lastLineNumber = state.doc.lines;
+            const cursorLine = state.doc.lineAt(state.selection.main.head).number;
+
+            if (cursorLine === lastLineNumber) {
+                const scrollerHeight = view.scrollDOM.clientHeight;
+                // Get the live padding percentage from the module instance
+                const paddingValue = scrollerHeight * (module.paddingPercentage / 100);
+
+                view.dispatch({
+                    effects: EditorView_class.scrollIntoView(state.selection.main.head, {
+                        y: "end",
+                        yMargin: paddingValue
+                    })
+                });
+            }
+        });
+    }
+
+    async onEnable() {
+        const settings = this.getSettings();
+        this.paddingPercentage = settings.paddingPercentage || 50;
+
+        this.app.workspace.getLeavesOfType('markdown').forEach(leaf => this.setupObserverForLeaf(leaf));
+
+        this.plugin.registerEvent(
+            this.app.workspace.on('layout-change', () => {
+                this.app.workspace.getLeavesOfType('markdown').forEach(leaf => this.setupObserverForLeaf(leaf));
+            })
+        );
+        
+        this.plugin.registerEvent(
+            this.app.workspace.on('active-leaf-change', (leaf) => {
+                if (leaf && leaf.view instanceof MarkdownView) {
+                    this.setupObserverForLeaf(leaf);
+                }
+            })
+        );
+    }
+
+    async onDisable() {
+        // The global extension cannot be disabled, but it checks for module.enabled,
+        // so we just need to clean up the padding here.
+        this.app.workspace.getLeavesOfType('markdown').forEach(leaf => {
+            if (this.observers.has(leaf)) {
+                this.observers.get(leaf).disconnect();
+                this.observers.delete(leaf);
+            }
+            this.removePadding(leaf);
+        });
+    }
+
+    setupObserverForLeaf(leaf) {
+        const view = leaf.view;
+        if (!view || !(view instanceof MarkdownView)) return;
+
+        // Register the global extension once we have a live editor view
+        if (!this.plugin.dynamicPaddingExtensionRegistered) {
+            const EditorView_class = view.editor.cm.constructor;
+            this.plugin.registerEditorExtension(this.createScrollFixExtension(EditorView_class));
+            this.plugin.dynamicPaddingExtensionRegistered = true;
+        }
+
+        if (this.observers.has(leaf)) {
+            return; // Already set up
+        }
+
+        const scroller = view.editor.cm.scrollDOM;
+        if (scroller) {
+            const observer = new ResizeObserver(() => this.applyPadding(leaf));
+            observer.observe(scroller);
+            this.observers.set(leaf, observer);
+            this.applyPadding(leaf);
+        }
+    }
+
+    applyPadding(leaf) {
+        const view = leaf.view;
+        if (view instanceof MarkdownView) {
+            const contentEl = view.editor.cm.contentDOM;
+            const scrollerEl = view.editor.cm.scrollDOM;
+            if (contentEl && scrollerEl) {
+                const height = scrollerEl.clientHeight;
+                const paddingValue = height * (this.paddingPercentage / 100);
+                contentEl.style.paddingBottom = `${paddingValue}px`;
+            }
+        }
+    }
+    
+    removePadding(leaf) {
+        const view = leaf.view;
+        if (view instanceof MarkdownView) {
+            const contentEl = view.editor.cm.contentDOM;
+            if (contentEl && contentEl.style.paddingBottom) {
+                contentEl.style.paddingBottom = '';
+            }
+        }
+    }
+
+    updatePaddingPercentage(newValue) {
+        this.paddingPercentage = newValue;
+        this.app.workspace.getLeavesOfType('markdown').forEach(leaf => {
+            this.applyPadding(leaf);
+        });
+    }
+
+    addSettings(containerEl) {
+        const settings = this.getSettings();
+        new Setting(containerEl)
+            .setName('Dynamic Editor Padding')
+            .setDesc('Set the percentage of the editor height to use as bottom padding, allowing you to scroll past the end of the document.')
+            .addSlider(slider => slider
+                .setLimits(0, 100, 5)
+                .setValue(this.paddingPercentage)
+                .setDynamicTooltip()
+                .onChange(async (value) => {
+                    await this.saveSettings({ ...settings, paddingPercentage: value });
+                    this.updatePaddingPercentage(value);
+                }));
+    }
+}
+
+// Export all core modules
+module.exports = {
+    modules: [
+        BracketLinkFixModule,
+        WhiteCanvasModeModule,
+        SmartifyQuotesModule,
+        BulkCreateModule,
+        DynamicPaddingModule
     ]
 };

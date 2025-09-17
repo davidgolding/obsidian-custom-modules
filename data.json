@@ -4,7 +4,8 @@
     "core-white-canvas-mode": true,
     "core-smartify-quotes": true,
     "core-bulk-create": true,
-    "note-statistics": true
+    "note-statistics": true,
+    "core-dynamic-padding": true
   },
   "moduleSettings": {
     "note-statistics": {
