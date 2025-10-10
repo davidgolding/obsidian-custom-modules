@@ -712,6 +712,629 @@ class DynamicPaddingModule extends PluginModule {
     }
 }
 
+// Title Case Conversion Module
+class TitleCaseModule extends PluginModule {
+    constructor(plugin) {
+        super(plugin);
+        this.id = 'core-title-case';
+        this.name = 'Title Case Conversion';
+        this.description = 'Convert selected text to title case using various style guides (NLP-enhanced)';
+        this.styleGuide = 'Chicago';
+        this.nlp = null; // Will be loaded on enable
+
+        // Word classification lists based on title-rules.pdf
+        this.articles = new Set(['a', 'an', 'the']);
+
+        this.coordinatingConjunctions = new Set(['and', 'but', 'for', 'nor', 'or', 'yet', 'so']);
+
+        this.subordinatingConjunctions = new Set([
+            'as', 'if', 'because', 'when', 'whenever', 'while', 'where', 'whereas',
+            'although', 'though', 'unless', 'until', 'since', 'after', 'before',
+            'that', 'whether', 'once', 'lest', 'provided', 'supposing'
+        ]);
+
+        // Prepositions grouped by length
+        this.prepositions1 = new Set(['v']);
+        this.prepositions2 = new Set(['at', 'by', 'in', 'of', 'on', 'to', 'up']);
+        this.prepositions3 = new Set(['for', 'off', 'out', 'via', 'per', 'pro', 'bar', 'qua', 'mid']);
+        this.prepositions4 = new Set(['from', 'into', 'unto', 'with', 'amid', 'atop', 'down', 'like', 'near', 'next', 'over', 'past', 'plus', 'sans', 'save', 'than', 'thru']);
+        this.prepositions5Plus = new Set([
+            'about', 'above', 'across', 'after', 'against', 'along', 'among', 'around',
+            'before', 'behind', 'below', 'beneath', 'beside', 'besides', 'between',
+            'beyond', 'during', 'except', 'inside', 'outside', 'through', 'throughout',
+            'toward', 'towards', 'under', 'underneath', 'unlike', 'until', 'within',
+            'without', 'aboard', 'absent', 'across', 'according', 'alongside', 'amidst',
+            'amongst', 'around', 'aslant', 'astride', 'barring', 'beside', 'besides',
+            'betwixt', 'circa', 'concerning', 'considering', 'despite', 'excluding',
+            'failing', 'following', 'given', 'including', 'notwithstanding', 'opposite',
+            'pending', 'regarding', 'respecting', 'round', 'saving', 'touching', 'versus'
+        ]);
+
+        // NYT specific always-lowercase words
+        this.nytLowercaseWords = new Set([
+            'a', 'and', 'as', 'at', 'but', 'by', 'en', 'for', 'if', 'in', 'of', 'on',
+            'or', 'the', 'to', 'v.', 'vs.', 'via'
+        ]);
+
+        // NYT specific always-capitalize words (when short)
+        this.nytCapitalizeWords = new Set(['no', 'nor', 'not', 'off', 'out', 'so', 'up']);
+    }
+
+    async onEnable() {
+        const settings = this.getSettings();
+        this.styleGuide = settings.styleGuide || 'Chicago';
+
+        // Load Compromise NLP library
+        try {
+            const path = require('path');
+            const fs = require('fs');
+            const compromisePath = path.join(this.plugin.manifest.dir, 'compromise.min.js');
+
+            if (await this.app.vault.adapter.exists(compromisePath)) {
+                const compromiseCode = await this.app.vault.adapter.read(compromisePath);
+                // Execute compromise in a sandboxed context
+                const compromiseModule = { exports: {} };
+                const fn = new Function('module', 'exports', compromiseCode);
+                fn(compromiseModule, compromiseModule.exports);
+                this.nlp = compromiseModule.exports;
+                console.log('Compromise NLP loaded successfully');
+            } else {
+                console.warn('Compromise library not found, falling back to heuristics');
+                this.nlp = null;
+            }
+        } catch (error) {
+            console.error('Failed to load Compromise NLP:', error);
+            this.nlp = null;
+        }
+
+        // Register context menu event
+        this.plugin.registerEvent(
+            this.app.workspace.on('editor-menu', (menu, editor, view) => {
+                // Only show if text is selected
+                if (editor.somethingSelected()) {
+                    menu.addItem((item) => {
+                        item
+                            .setTitle('Convert to title case...')
+                            .setIcon('heading')
+                            .onClick(() => {
+                                this.convertSelectionToTitleCase(editor);
+                            });
+                    });
+                }
+            })
+        );
+    }
+
+    async onDisable() {
+        // Cleanup handled by plugin framework
+    }
+
+    convertSelectionToTitleCase(editor) {
+        const selectedText = editor.getSelection();
+        if (!selectedText) return;
+
+        const titleCased = this.toTitleCase(selectedText, this.styleGuide);
+        editor.replaceSelection(titleCased);
+    }
+
+    toTitleCase(text, style) {
+        // Split into words while preserving punctuation and whitespace
+        const tokens = this.tokenize(text);
+        const result = [];
+
+        for (let i = 0; i < tokens.length; i++) {
+            const token = tokens[i];
+
+            // Skip whitespace and punctuation
+            if (!token.word) {
+                result.push(token.original);
+                continue;
+            }
+
+            const word = token.word;
+            const lowerWord = word.toLowerCase();
+            const isFirst = token.isFirstWord;
+            const isLast = token.isLastWord;
+            const afterColon = token.afterColon;
+            const grammaticalFunction = token.grammaticalFunction;
+            const posTag = token.posTag;
+
+            // Apply style-specific rules
+            const capitalized = this.applyStyleRules(
+                word, lowerWord, isFirst, isLast, afterColon, style, grammaticalFunction, posTag
+            );
+
+            result.push(capitalized);
+        }
+
+        return result.join('');
+    }
+
+    tokenize(text) {
+        const tokens = [];
+        const regex = /([^\s\-—–]+)/g;
+        let match;
+        let lastIndex = 0;
+        let wordIndex = 0;
+        let totalWords = (text.match(regex) || []).length;
+        let previousWasColon = false;
+
+        // Use NLP to analyze the entire text if available
+        let nlpDoc = null;
+        let nlpTerms = [];
+        if (this.nlp) {
+            try {
+                nlpDoc = this.nlp(text);
+                nlpTerms = nlpDoc.terms().out('array');
+            } catch (error) {
+                console.warn('NLP analysis failed, falling back to heuristics:', error);
+            }
+        }
+
+        let nlpIndex = 0;
+
+        while ((match = regex.exec(text)) !== null) {
+            // Add any whitespace/punctuation before this word
+            if (match.index > lastIndex) {
+                const between = text.substring(lastIndex, match.index);
+                tokens.push({ original: between, word: null });
+                // Check if it contains a colon
+                if (between.includes(':')) {
+                    previousWasColon = true;
+                }
+            }
+
+            // Get POS tag from NLP if available
+            let posTag = null;
+            let grammaticalFunction = null;
+            if (nlpDoc && nlpIndex < nlpTerms.length) {
+                try {
+                    const term = nlpDoc.terms().eq(nlpIndex);
+                    posTag = this.getPOSTag(term);
+                    grammaticalFunction = this.determineGrammaticalFunction(match[0], term, posTag);
+                } catch (error) {
+                    // Silently fall back to heuristics
+                }
+                nlpIndex++;
+            }
+
+            // Add the word
+            tokens.push({
+                original: match[0],
+                word: match[0],
+                isFirstWord: wordIndex === 0,
+                isLastWord: wordIndex === totalWords - 1,
+                afterColon: previousWasColon,
+                posTag: posTag,
+                grammaticalFunction: grammaticalFunction
+            });
+
+            previousWasColon = false;
+            wordIndex++;
+            lastIndex = regex.lastIndex;
+        }
+
+        // Add any remaining text
+        if (lastIndex < text.length) {
+            tokens.push({ original: text.substring(lastIndex), word: null });
+        }
+
+        return tokens;
+    }
+
+    getPOSTag(term) {
+        // Extract POS tag from Compromise term
+        if (term.has('#Verb')) return 'verb';
+        if (term.has('#Noun')) return 'noun';
+        if (term.has('#Adjective')) return 'adjective';
+        if (term.has('#Adverb')) return 'adverb';
+        if (term.has('#Preposition')) return 'preposition';
+        if (term.has('#Conjunction')) return 'conjunction';
+        if (term.has('#Article')) return 'article';
+        if (term.has('#Pronoun')) return 'pronoun';
+        return null;
+    }
+
+    determineGrammaticalFunction(word, term, posTag) {
+        const lowerWord = word.toLowerCase();
+
+        // Specific detection for ambiguous words
+        if (['in', 'out', 'up', 'on', 'off', 'down', 'by', 'over'].includes(lowerWord)) {
+            if (posTag === 'adverb') return 'adverb';
+            if (posTag === 'verb') return 'verb';
+            if (posTag === 'preposition') return 'preposition';
+
+            // Check if part of phrasal verb
+            if (term.has('#PhrasalVerb')) return 'adverb';
+        }
+
+        // Letter/acronym detection (e.g., "A to Z")
+        if (lowerWord === 'a' && word.length === 1) {
+            if (posTag === 'noun' || term.has('#Acronym')) return 'noun';
+            if (posTag === 'article') return 'article';
+        }
+
+        // Infinitive detection
+        if (lowerWord === 'to') {
+            // Check if followed by a verb
+            const nextTerm = term.next();
+            if (nextTerm && nextTerm.has('#Verb')) {
+                return 'infinitive';
+            }
+            if (posTag === 'preposition') return 'preposition';
+        }
+
+        // Return the detected POS tag as the function
+        return posTag;
+    }
+
+    applyStyleRules(word, lowerWord, isFirst, isLast, afterColon, style, grammaticalFunction, posTag) {
+        // Handle hyphenated words
+        if (word.includes('-')) {
+            return this.handleHyphenatedWord(word, isFirst, isLast, style);
+        }
+
+        // Always capitalize first word
+        if (isFirst) {
+            return this.capitalize(word);
+        }
+
+        // Style-specific handling of last word
+        const capitalizeLastWord = !['AMA', 'APA', 'Bluebook'].includes(style);
+        if (isLast && capitalizeLastWord) {
+            return this.capitalize(word);
+        }
+
+        // APA: Capitalize first word after colon
+        if (afterColon && style === 'APA') {
+            return this.capitalize(word);
+        }
+
+        // NLP-enhanced rules: Use grammatical function when available
+        if (grammaticalFunction) {
+            const nlpResult = this.applyNLPAwareRules(word, lowerWord, grammaticalFunction, posTag, style);
+            if (nlpResult !== null) {
+                return nlpResult;
+            }
+        }
+
+        // Apply style-specific rules (fallback to heuristics)
+        switch (style) {
+            case 'AMA':
+                return this.applyAMARules(word, lowerWord);
+            case 'AP':
+                return this.applyAPRules(word, lowerWord);
+            case 'APA':
+                return this.applyAPARules(word, lowerWord);
+            case 'Bluebook':
+                return this.applyBluebookRules(word, lowerWord);
+            case 'Chicago':
+                return this.applyChicagoRules(word, lowerWord);
+            case 'MLA':
+                return this.applyMLARules(word, lowerWord);
+            case 'New York Times':
+                return this.applyNYTRules(word, lowerWord);
+            case 'Wikipedia':
+                return this.applyWikipediaRules(word, lowerWord);
+            default:
+                return this.capitalize(word);
+        }
+    }
+
+    applyNLPAwareRules(word, lowerWord, grammaticalFunction, posTag, style) {
+        // Handle ambiguous words based on their detected grammatical function
+
+        // Verbs, nouns, adjectives, adverbs, pronouns are always capitalized
+        if (['verb', 'noun', 'adjective', 'adverb', 'pronoun'].includes(grammaticalFunction)) {
+            return this.capitalize(word);
+        }
+
+        // Articles are always lowercased
+        if (grammaticalFunction === 'article') {
+            return lowerWord;
+        }
+
+        // Infinitives: "to" before a verb
+        if (grammaticalFunction === 'infinitive') {
+            // AP style capitalizes "to" in infinitives, others lowercase it
+            return style === 'AP' ? this.capitalize(word) : lowerWord;
+        }
+
+        // Conjunctions
+        if (grammaticalFunction === 'conjunction') {
+            // Coordinating conjunctions handling
+            if (this.coordinatingConjunctions.has(lowerWord)) {
+                // Chicago capitalizes "yet" and "so"
+                if (style === 'Chicago' && ['yet', 'so'].includes(lowerWord)) {
+                    return this.capitalize(word);
+                }
+                // NYT capitalizes "so" and "nor"
+                if (style === 'New York Times' && ['so', 'nor'].includes(lowerWord)) {
+                    return this.capitalize(word);
+                }
+                // All styles lowercase other coordinating conjunctions
+                return lowerWord;
+            }
+
+            // Subordinating conjunctions
+            if (this.subordinatingConjunctions.has(lowerWord)) {
+                // AMA, Bluebook, Chicago, MLA, Wikipedia capitalize subordinating conjunctions
+                if (['AMA', 'Bluebook', 'Chicago', 'MLA', 'Wikipedia'].includes(style)) {
+                    // Exception: Chicago always lowercases "as"
+                    if (style === 'Chicago' && lowerWord === 'as') {
+                        return lowerWord;
+                    }
+                    return this.capitalize(word);
+                }
+                // AP, APA, NYT lowercase short subordinating conjunctions
+                if (['AP', 'APA', 'New York Times'].includes(style) && word.length <= 3) {
+                    return lowerWord;
+                }
+                return this.capitalize(word);
+            }
+        }
+
+        // Prepositions: Style-specific rules based on length
+        if (grammaticalFunction === 'preposition') {
+            return this.applyPrepositionRules(word, lowerWord, style);
+        }
+
+        // If we couldn't determine a clear rule, return null to fall back to heuristics
+        return null;
+    }
+
+    applyPrepositionRules(word, lowerWord, style) {
+        const length = word.length;
+
+        switch (style) {
+            case 'AMA':
+            case 'AP':
+            case 'APA':
+                // Lowercase prepositions of 3 or fewer letters
+                return length <= 3 ? lowerWord : this.capitalize(word);
+
+            case 'Bluebook':
+            case 'Chicago':
+            case 'Wikipedia':
+                // Lowercase prepositions of 4 or fewer letters
+                return length <= 4 ? lowerWord : this.capitalize(word);
+
+            case 'MLA':
+                // Lowercase ALL prepositions
+                return lowerWord;
+
+            case 'New York Times':
+                // NYT has explicit word lists
+                if (this.nytLowercaseWords.has(lowerWord)) return lowerWord;
+                if (this.nytCapitalizeWords.has(lowerWord)) return this.capitalize(word);
+                // Capitalize 4+ letter words
+                return length >= 4 ? this.capitalize(word) : lowerWord;
+
+            default:
+                return this.capitalize(word);
+        }
+    }
+
+    applyAMARules(word, lowerWord) {
+        // Lowercase articles
+        if (this.articles.has(lowerWord)) return lowerWord;
+
+        // Lowercase coordinating conjunctions
+        if (this.coordinatingConjunctions.has(lowerWord)) return lowerWord;
+
+        // Lowercase prepositions of 3 or fewer letters
+        if (this.isPreposition(lowerWord) && word.length <= 3) return lowerWord;
+
+        // Lowercase "to" (infinitives)
+        if (lowerWord === 'to') return lowerWord;
+
+        // Capitalize everything else
+        return this.capitalize(word);
+    }
+
+    applyAPRules(word, lowerWord) {
+        // Capitalize all words of 4 or more letters
+        if (word.length >= 4) return this.capitalize(word);
+
+        // Lowercase articles
+        if (this.articles.has(lowerWord)) return lowerWord;
+
+        // Lowercase conjunctions of 3 letters or fewer
+        if (this.coordinatingConjunctions.has(lowerWord) && word.length <= 3) return lowerWord;
+        if (this.subordinatingConjunctions.has(lowerWord) && word.length <= 3) return lowerWord;
+
+        // Lowercase prepositions of 3 letters or fewer (but capitalize "to" in infinitives)
+        if (this.isPreposition(lowerWord) && word.length <= 3 && lowerWord !== 'to') return lowerWord;
+
+        // Capitalize "to" in infinitives (and other 2-3 letter words not caught above)
+        return this.capitalize(word);
+    }
+
+    applyAPARules(word, lowerWord) {
+        // Capitalize all words of 4 or more letters
+        if (word.length >= 4) return this.capitalize(word);
+
+        // Lowercase articles
+        if (this.articles.has(lowerWord)) return lowerWord;
+
+        // Lowercase conjunctions of 3 letters or fewer
+        if (this.coordinatingConjunctions.has(lowerWord)) return lowerWord;
+        if (this.subordinatingConjunctions.has(lowerWord) && word.length <= 3) return lowerWord;
+
+        // Lowercase prepositions of 3 letters or fewer
+        if (this.isPreposition(lowerWord) && word.length <= 3) return lowerWord;
+
+        // Capitalize nouns, verbs, adjectives, adverbs, pronouns
+        return this.capitalize(word);
+    }
+
+    applyBluebookRules(word, lowerWord) {
+        // Lowercase articles
+        if (this.articles.has(lowerWord)) return lowerWord;
+
+        // Lowercase conjunctions of 4 letters or fewer
+        if (this.coordinatingConjunctions.has(lowerWord)) return lowerWord;
+        // Note: Bluebook capitalizes subordinating conjunctions like "if"
+
+        // Lowercase prepositions of 4 letters or fewer
+        if (this.isPreposition(lowerWord) && word.length <= 4) return lowerWord;
+
+        // Capitalize everything else
+        return this.capitalize(word);
+    }
+
+    applyChicagoRules(word, lowerWord) {
+        // Lowercase articles
+        if (this.articles.has(lowerWord)) return lowerWord;
+
+        // Lowercase specific coordinating conjunctions: and, but, for, nor, or
+        if (['and', 'but', 'for', 'nor', 'or'].includes(lowerWord)) return lowerWord;
+
+        // Always lowercase "as"
+        if (lowerWord === 'as') return lowerWord;
+
+        // Lowercase "to" in infinitives
+        if (lowerWord === 'to') return lowerWord;
+
+        // Lowercase prepositions of 4 letters or fewer
+        if (this.isPreposition(lowerWord) && word.length <= 4) return lowerWord;
+
+        // Capitalize everything else (including "yet" and "so")
+        return this.capitalize(word);
+    }
+
+    applyMLARules(word, lowerWord) {
+        // Lowercase articles
+        if (this.articles.has(lowerWord)) return lowerWord;
+
+        // Lowercase coordinating conjunctions
+        if (this.coordinatingConjunctions.has(lowerWord)) return lowerWord;
+
+        // Lowercase ALL prepositions regardless of length
+        if (this.isPreposition(lowerWord)) return lowerWord;
+
+        // Lowercase "to" in infinitives
+        if (lowerWord === 'to') return lowerWord;
+
+        // Capitalize subordinating conjunctions, nouns, verbs, adjectives, adverbs, pronouns
+        return this.capitalize(word);
+    }
+
+    applyNYTRules(word, lowerWord) {
+        // Capitalize all words of 4 or more letters
+        if (word.length >= 4) return this.capitalize(word);
+
+        // Capitalize specific short words
+        if (this.nytCapitalizeWords.has(lowerWord)) return this.capitalize(word);
+
+        // Lowercase specific words
+        if (this.nytLowercaseWords.has(lowerWord)) return lowerWord;
+        if (lowerWord === 'v.' || lowerWord === 'vs.') return lowerWord;
+
+        // Capitalize everything else (nouns, pronouns, verbs)
+        return this.capitalize(word);
+    }
+
+    applyWikipediaRules(word, lowerWord) {
+        // Lowercase articles
+        if (this.articles.has(lowerWord)) return lowerWord;
+
+        // Lowercase coordinating conjunctions
+        if (this.coordinatingConjunctions.has(lowerWord)) return lowerWord;
+
+        // Lowercase prepositions of 4 letters or fewer
+        if (this.isPreposition(lowerWord) && word.length <= 4) return lowerWord;
+
+        // Lowercase "to" in infinitives
+        if (lowerWord === 'to') return lowerWord;
+
+        // Capitalize subordinating conjunctions, nouns, verbs, adjectives, adverbs, pronouns
+        // Capitalize prepositions of 5 or more letters
+        return this.capitalize(word);
+    }
+
+    isPreposition(lowerWord) {
+        return this.prepositions1.has(lowerWord) ||
+               this.prepositions2.has(lowerWord) ||
+               this.prepositions3.has(lowerWord) ||
+               this.prepositions4.has(lowerWord) ||
+               this.prepositions5Plus.has(lowerWord);
+    }
+
+    handleHyphenatedWord(word, isFirst, isLast, style) {
+        const parts = word.split('-');
+        const capitalizedParts = parts.map((part, index) => {
+            const lowerPart = part.toLowerCase();
+
+            // First part is always capitalized if it's the first word
+            if (index === 0 && isFirst) {
+                return this.capitalize(part);
+            }
+
+            // Style-specific hyphenation rules
+            switch (style) {
+                case 'AMA':
+                    // Capitalize both parts
+                    return this.capitalize(part);
+
+                case 'Chicago':
+                    // Capitalize first element and subsequent words that are not articles, prepositions, or coordinating conjunctions
+                    if (index === 0) return this.capitalize(part);
+                    if (this.articles.has(lowerPart)) return lowerPart;
+                    if (this.coordinatingConjunctions.has(lowerPart)) return lowerPart;
+                    if (this.isPreposition(lowerPart)) return lowerPart;
+                    return this.capitalize(part);
+
+                case 'APA':
+                    // Capitalize the second part of hyphenated major words
+                    if (index === 0) return this.capitalize(part);
+                    return this.capitalize(part);
+
+                case 'MLA':
+                    // Capitalize principal words that follow hyphens
+                    if (this.articles.has(lowerPart)) return lowerPart;
+                    if (this.coordinatingConjunctions.has(lowerPart)) return lowerPart;
+                    if (this.isPreposition(lowerPart)) return lowerPart;
+                    return this.capitalize(part);
+
+                default:
+                    // Default: capitalize all parts
+                    return this.capitalize(part);
+            }
+        });
+
+        return capitalizedParts.join('-');
+    }
+
+    capitalize(word) {
+        if (!word) return word;
+        return word.charAt(0).toUpperCase() + word.slice(1).toLowerCase();
+    }
+
+    addSettings(containerEl) {
+        const settings = this.getSettings();
+
+        new Setting(containerEl)
+            .setName('Title Case Style')
+            .setDesc('Select the style guide to use for title case conversion')
+            .addDropdown(dropdown => dropdown
+                .addOption('AMA', 'AMA (American Medical Association)')
+                .addOption('AP', 'AP (Associated Press)')
+                .addOption('APA', 'APA (American Psychological Association)')
+                .addOption('Bluebook', 'Bluebook (Legal Citation)')
+                .addOption('Chicago', 'Chicago Manual of Style')
+                .addOption('MLA', 'MLA (Modern Language Association)')
+                .addOption('New York Times', 'New York Times')
+                .addOption('Wikipedia', 'Wikipedia')
+                .setValue(settings.styleGuide || 'Chicago')
+                .onChange(async (value) => {
+                    this.styleGuide = value;
+                    await this.saveSettings({ ...settings, styleGuide: value });
+                })
+            );
+    }
+}
+
 // Export all core modules
 module.exports = {
     modules: [
@@ -719,6 +1342,7 @@ module.exports = {
         WhiteCanvasModeModule,
         SmartifyQuotesModule,
         BulkCreateModule,
-        DynamicPaddingModule
+        DynamicPaddingModule,
+        TitleCaseModule
     ]
 };

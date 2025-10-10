@@ -5,12 +5,16 @@
     "core-smartify-quotes": true,
     "core-bulk-create": true,
     "note-statistics": true,
-    "core-dynamic-padding": true
+    "core-dynamic-padding": true,
+    "core-title-case": true
   },
   "moduleSettings": {
     "note-statistics": {
       "wordsPerMinute": 200,
       "showCharCount": false
+    },
+    "core-dynamic-padding": {
+      "paddingPercentage": 45
     }
   },
   "userModulesFolder": "Sources/Attachments/Scripts",
