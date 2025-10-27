@@ -6,7 +6,9 @@
     "core-bulk-create": true,
     "note-statistics": true,
     "core-dynamic-padding": true,
-    "core-title-case": true
+    "core-title-case": true,
+    "source-note-sorter": true,
+    "ollama-chat": true
   },
   "moduleSettings": {
     "note-statistics": {
@@ -15,9 +17,16 @@
     },
     "core-dynamic-padding": {
       "paddingPercentage": 45
+    },
+    "source-note-sorter": {
+      "sortMode": "date"
+    },
+    "ollama-chat": {
+      "embeddingModel": "mxbai-embed-large:latest",
+      "defaultChatModel": "gpt-oss:20b"
     }
   },
-  "userModulesFolder": "Sources/Attachments/Scripts",
+  "userModulesFolder": "",
   "bracketLinkFix": true,
   "whiteCanvasMode": true,
   "smartifyQuotes": true,
