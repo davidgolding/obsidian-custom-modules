@@ -23,7 +23,8 @@
     },
     "ollama-chat": {
       "embeddingModel": "mxbai-embed-large:latest",
-      "defaultChatModel": "gpt-oss:20b"
+      "defaultChatModel": "gpt-oss:20b",
+      "systemPrompt": "Your role is to help summarize, synthesize, and connect insights across the user's Obsidian notes. Use all available context provided, be specific in your explanations, and suggest related ideas or notes that might be useful. If a specific note or reference is given, focus your answer accordingly."
     }
   },
   "userModulesFolder": "",

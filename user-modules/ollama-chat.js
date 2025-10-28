@@ -1,6 +1,6 @@
 // Ollama Chat Module
 // AI chat interface with RAG (Retrieval Augmented Generation) using Ollama
-const { ItemView, WorkspaceLeaf, Setting, Notice, TFile, debounce, normalizePath } = obsidian;
+const { ItemView, WorkspaceLeaf, Setting, Notice, TFile, debounce, normalizePath, MarkdownRenderer } = obsidian;
 
 // View type identifier
 const VIEW_TYPE_OLLAMA_CHAT = 'ollama-chat-view';
@@ -43,20 +43,36 @@ class OllamaService {
 
     async generateEmbedding(text, model = 'mxbai-embed-large') {
         try {
+            // Validate input
+            if (!text || typeof text !== 'string' || text.trim().length === 0) {
+                return null;
+            }
+
+            const trimmedText = text.trim();
+
             const response = await fetch(`${this.baseUrl}/api/embed`, {
                 method: 'POST',
                 headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify({ model, input: text })
+                body: JSON.stringify({ model, input: trimmedText })
             });
 
             if (!response.ok) {
+                const errorText = await response.text();
+                console.error(`Embedding API error (${response.status}):`, errorText);
                 throw new Error(`Embedding failed: ${response.statusText}`);
             }
 
             const data = await response.json();
-            return data.embeddings?.[0] || data.embedding;
+            const embedding = data.embeddings?.[0] || data.embedding;
+
+            if (!embedding || !Array.isArray(embedding) || embedding.length === 0) {
+                console.error('Ollama API returned invalid embedding');
+                return null;
+            }
+
+            return embedding;
         } catch (error) {
-            console.error('Error generating embedding:', error);
+            console.error('Error generating embedding:', error.message);
             return null;
         }
     }
@@ -207,10 +223,11 @@ class EmbeddingManager {
                 this.embeddings = data.notes || {};
                 this.metadata = data.metadata || this.metadata;
                 this.isLoaded = true;
-                console.log(`Loaded ${Object.keys(this.embeddings).length} embeddings`);
+            } else {
+                this.isLoaded = true;
             }
         } catch (error) {
-            console.log('No existing embeddings found, starting fresh');
+            console.error('Error loading embeddings:', error);
             this.isLoaded = true;
         }
     }
@@ -246,7 +263,7 @@ class EmbeddingManager {
                 }
             }
         } catch (error) {
-            console.error('Error saving embeddings:', error);
+            console.error('Error saving embeddings:', error.message);
         }
     }
 
@@ -257,7 +274,13 @@ class EmbeddingManager {
 
         try {
             const content = await this.vault.read(file);
-            const embedding = await this.ollamaService.generateEmbedding(content, this.metadata.model);
+
+            // Validate content
+            if (!content || typeof content !== 'string' || content.trim().length === 0) {
+                return false;
+            }
+
+            const embedding = await this.ollamaService.generateEmbedding(content.trim(), this.metadata.model);
 
             if (embedding) {
                 this.embeddings[file.path] = {
@@ -268,20 +291,26 @@ class EmbeddingManager {
                 return true;
             }
         } catch (error) {
-            console.error(`Error embedding ${file.path}:`, error);
+            console.error(`Error embedding ${file.path}:`, error.message);
         }
         return false;
     }
 
     async embedMultipleNotes(files, progressCallback) {
         let processed = 0;
+        let successful = 0;
+
         for (const file of files) {
-            await this.embedNote(file);
+            const result = await this.embedNote(file);
+            if (result) {
+                successful++;
+            }
             processed++;
             if (progressCallback) {
                 progressCallback(processed, files.length, file);
             }
         }
+
         await this.save();
     }
 
@@ -319,6 +348,7 @@ class EmbeddingManager {
         // Generate query embedding
         const queryEmbedding = await this.ollamaService.generateEmbedding(query, this.metadata.model);
         if (!queryEmbedding) {
+            console.error('Failed to generate query embedding');
             return [];
         }
 
@@ -388,9 +418,12 @@ class ChatManager {
 
         // 2. Add semantically similar notes
         const similarNotes = await this.embeddingManager.searchSimilar(query, topK);
+
         for (const result of similarNotes) {
             // Skip if already pinned
-            if (this.pinnedNotes.has(result.path)) continue;
+            if (this.pinnedNotes.has(result.path)) {
+                continue;
+            }
 
             const file = this.app.vault.getAbstractFileByPath(result.path);
             if (file instanceof TFile) {
@@ -477,6 +510,7 @@ class OllamaChatView extends ItemView {
 
     async initialize() {
         const settings = this.module.getSettings();
+
         this.chatManager = new ChatManager(this.app, this.module.embeddingManager);
         this.chatManager.setSystemPrompt(settings.systemPrompt || this.chatManager.systemPrompt);
 
@@ -490,10 +524,21 @@ class OllamaChatView extends ItemView {
         const header = container.createDiv({ cls: 'ollama-chat-header' });
 
         const titleDiv = header.createDiv({ cls: 'ollama-chat-title' });
-        titleDiv.createSpan({ text: '🤖 Ollama Chat', cls: 'chat-title-text' });
+        titleDiv.createSpan({ text: 'Ollama Chat', cls: 'chat-title-text' });
+
+        // Header controls container
+        const headerControls = header.createDiv({ cls: 'ollama-header-controls' });
+
+        // Reset button
+        const resetButton = headerControls.createDiv({
+            cls: 'ollama-reset-button',
+            attr: { 'aria-label': 'Clear chat' }
+        });
+        resetButton.innerHTML = '<svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="1 4 1 10 7 10"></polyline><path d="M3.51 15a9 9 0 1 0 2.13-9.36L1 10"></path></svg>';
+        resetButton.addEventListener('click', () => this.resetChat());
 
         // Model selector
-        const modelSelect = header.createEl('select', { cls: 'ollama-model-select' });
+        const modelSelect = headerControls.createEl('select', { cls: 'ollama-model-select' });
         for (const model of this.availableModels) {
             const option = modelSelect.createEl('option', {
                 value: model.name,
@@ -531,18 +576,65 @@ class OllamaChatView extends ItemView {
             this.inputArea.style.height = Math.min(this.inputArea.scrollHeight, 150) + 'px';
         });
 
-        // Send button
-        const sendButton = inputContainer.createDiv({ cls: 'ollama-send-button' });
-        sendButton.innerHTML = '↑';
-        sendButton.addEventListener('click', () => this.sendMessage());
+        // Send/Stop button
+        this.sendButton = inputContainer.createDiv({ cls: 'ollama-send-button' });
+        this.sendButton.innerHTML = '↑';
+        this.sendButton.addEventListener('click', () => this.handleSendStopClick());
 
         // Enter to send (Shift+Enter for new line)
         this.inputArea.addEventListener('keydown', (e) => {
             if (e.key === 'Enter' && !e.shiftKey) {
                 e.preventDefault();
-                this.sendMessage();
+                if (!this.isStreaming) {
+                    this.sendMessage();
+                }
             }
         });
+    }
+
+    handleSendStopClick() {
+        if (this.isStreaming) {
+            this.stopStreaming();
+        } else {
+            this.sendMessage();
+        }
+    }
+
+    setSendButtonState(isStreaming) {
+        if (isStreaming) {
+            // Change to stop button
+            this.sendButton.innerHTML = '■';
+            this.sendButton.addClass('stop-mode');
+            this.sendButton.setAttribute('aria-label', 'Stop generating');
+        } else {
+            // Change to send button
+            this.sendButton.innerHTML = '↑';
+            this.sendButton.removeClass('stop-mode');
+            this.sendButton.setAttribute('aria-label', 'Send message');
+        }
+    }
+
+    stopStreaming() {
+        this.module.ollamaService.abortChat();
+        this.isStreaming = false;
+        this.setSendButtonState(false);
+    }
+
+    resetChat() {
+        // Clear messages UI
+        this.messagesContainer.empty();
+
+        // Clear chat history
+        if (this.chatManager) {
+            this.chatManager.clearHistory();
+        }
+
+        // Reset streaming state
+        if (this.isStreaming) {
+            this.stopStreaming();
+        }
+
+        new Notice('Chat cleared');
     }
 
     updatePinnedNotesUI() {
@@ -551,7 +643,7 @@ class OllamaChatView extends ItemView {
 
         if (pinnedNotes.length > 0) {
             const pinnedLabel = this.pinnedNotesContainer.createDiv({ cls: 'pinned-label' });
-            pinnedLabel.textContent = '📎 Pinned:';
+            pinnedLabel.textContent = 'Pinned:';
 
             for (const path of pinnedNotes) {
                 const chip = this.pinnedNotesContainer.createDiv({ cls: 'pinned-note-chip' });
@@ -589,6 +681,7 @@ class OllamaChatView extends ItemView {
 
         try {
             this.isStreaming = true;
+            this.setSendButtonState(true);
 
             // Prepare context and messages
             const settings = this.module.getSettings();
@@ -610,9 +703,14 @@ class OllamaChatView extends ItemView {
 
             for await (const chunk of stream) {
                 fullResponse += chunk;
+                // Update with plain text during streaming for performance
                 contentEl.textContent = fullResponse;
                 this.messagesContainer.scrollTop = this.messagesContainer.scrollHeight;
             }
+
+            // After streaming is complete, render as markdown
+            contentEl.empty();
+            await this.renderMarkdown(fullResponse, contentEl);
 
             // Add to chat history
             this.chatManager.addMessage('user', query);
@@ -624,10 +722,16 @@ class OllamaChatView extends ItemView {
             }
 
         } catch (error) {
-            contentEl.textContent = `Error: ${error.message}`;
-            console.error('Chat error:', error);
+            // Only show error if it wasn't aborted by user
+            if (error.name !== 'AbortError') {
+                contentEl.textContent = `Error: ${error.message}`;
+                console.error('Chat error:', error);
+            } else {
+                contentEl.textContent = 'Response stopped by user';
+            }
         } finally {
             this.isStreaming = false;
+            this.setSendButtonState(false);
         }
     }
 
@@ -646,7 +750,7 @@ class OllamaChatView extends ItemView {
 
     addSourcesToMessage(messageEl, sources) {
         const sourcesEl = messageEl.createDiv({ cls: 'message-sources' });
-        sourcesEl.createSpan({ text: '📚 Sources: ', cls: 'sources-label' });
+        sourcesEl.createSpan({ text: 'Sources: ', cls: 'sources-label' });
 
         sources.forEach((source, index) => {
             if (index > 0) sourcesEl.appendText(', ');
@@ -664,6 +768,43 @@ class OllamaChatView extends ItemView {
                 link.addClass('source-pinned');
             }
         });
+    }
+
+    async renderMarkdown(content, containerEl) {
+        // Check if content contains markdown indicators
+        const hasMarkdown = this.detectMarkdown(content);
+
+        if (hasMarkdown) {
+            // Render as markdown
+            await MarkdownRenderer.renderMarkdown(
+                content,
+                containerEl,
+                '',
+                this
+            );
+        } else {
+            // Render as plain text
+            containerEl.textContent = content;
+        }
+    }
+
+    detectMarkdown(text) {
+        // Check for common markdown patterns
+        const markdownPatterns = [
+            /^#{1,6}\s/m,           // Headers
+            /\*\*.*?\*\*/,          // Bold
+            /\*.*?\*/,              // Italic
+            /_.*?_/,                // Italic underscore
+            /`.*?`/,                // Inline code
+            /```[\s\S]*?```/,       // Code blocks
+            /^\s*[-*+]\s/m,         // Unordered lists
+            /^\s*\d+\.\s/m,         // Ordered lists
+            /\[.*?\]\(.*?\)/,       // Links
+            /^\s*>\s/m,             // Blockquotes
+            /\|.*\|.*\|/,           // Tables
+        ];
+
+        return markdownPatterns.some(pattern => pattern.test(text));
     }
 
     addStyles() {
@@ -710,6 +851,33 @@ class OllamaChatView extends ItemView {
 .ollama-chat-view .chat-title-text {
     font-weight: 600 !important;
     font-size: 15px !important;
+}
+
+.ollama-chat-view .ollama-header-controls {
+    display: flex !important;
+    align-items: center !important;
+    gap: 8px !important;
+}
+
+.ollama-chat-view .ollama-reset-button {
+    width: 32px !important;
+    height: 32px !important;
+    border-radius: 6px !important;
+    display: flex !important;
+    align-items: center !important;
+    justify-content: center !important;
+    cursor: pointer !important;
+    color: var(--text-muted) !important;
+    transition: all 0.2s ease !important;
+}
+
+.ollama-chat-view .ollama-reset-button:hover {
+    background: var(--background-modifier-hover) !important;
+    color: var(--text-normal) !important;
+}
+
+.ollama-chat-view .ollama-reset-button:active {
+    transform: scale(0.95) !important;
 }
 
 .ollama-chat-view .ollama-model-select {
@@ -813,6 +981,104 @@ class OllamaChatView extends ItemView {
     line-height: 1.5 !important;
     white-space: pre-wrap !important;
     word-wrap: break-word !important;
+}
+
+/* Markdown rendering styles */
+.ollama-chat-view .message-content h1,
+.ollama-chat-view .message-content h2,
+.ollama-chat-view .message-content h3,
+.ollama-chat-view .message-content h4,
+.ollama-chat-view .message-content h5,
+.ollama-chat-view .message-content h6 {
+    margin: 12px 0 8px 0 !important;
+    font-weight: 600 !important;
+}
+
+.ollama-chat-view .message-content h1 { font-size: 1.5em !important; }
+.ollama-chat-view .message-content h2 { font-size: 1.3em !important; }
+.ollama-chat-view .message-content h3 { font-size: 1.1em !important; }
+
+.ollama-chat-view .message-content p {
+    margin: 8px 0 !important;
+}
+
+.ollama-chat-view .message-content ul,
+.ollama-chat-view .message-content ol {
+    margin: 8px 0 !important;
+    padding-left: 24px !important;
+}
+
+.ollama-chat-view .message-content li {
+    margin: 4px 0 !important;
+}
+
+.ollama-chat-view .message-content code {
+    background: rgba(0, 0, 0, 0.1) !important;
+    padding: 2px 6px !important;
+    border-radius: 3px !important;
+    font-family: var(--font-monospace) !important;
+    font-size: 0.9em !important;
+}
+
+.ollama-chat-view .chat-message-user .message-content code {
+    background: rgba(255, 255, 255, 0.2) !important;
+}
+
+.ollama-chat-view .message-content pre {
+    background: rgba(0, 0, 0, 0.1) !important;
+    padding: 12px !important;
+    border-radius: 6px !important;
+    overflow-x: auto !important;
+    margin: 8px 0 !important;
+}
+
+.ollama-chat-view .chat-message-user .message-content pre {
+    background: rgba(255, 255, 255, 0.2) !important;
+}
+
+.ollama-chat-view .message-content pre code {
+    background: transparent !important;
+    padding: 0 !important;
+}
+
+.ollama-chat-view .message-content blockquote {
+    border-left: 3px solid var(--text-muted) !important;
+    padding-left: 12px !important;
+    margin: 8px 0 !important;
+    opacity: 0.8 !important;
+}
+
+.ollama-chat-view .message-content a {
+    color: var(--text-accent) !important;
+    text-decoration: underline !important;
+}
+
+.ollama-chat-view .chat-message-user .message-content a {
+    color: rgba(255, 255, 255, 0.9) !important;
+}
+
+.ollama-chat-view .message-content table {
+    border-collapse: collapse !important;
+    margin: 8px 0 !important;
+    width: 100% !important;
+}
+
+.ollama-chat-view .message-content th,
+.ollama-chat-view .message-content td {
+    border: 1px solid var(--background-modifier-border) !important;
+    padding: 6px 12px !important;
+    text-align: left !important;
+}
+
+.ollama-chat-view .message-content th {
+    background: rgba(0, 0, 0, 0.05) !important;
+    font-weight: 600 !important;
+}
+
+.ollama-chat-view .message-content hr {
+    border: none !important;
+    border-top: 1px solid var(--background-modifier-border) !important;
+    margin: 12px 0 !important;
 }
 
 /* Typing indicator animation */
@@ -935,6 +1201,20 @@ class OllamaChatView extends ItemView {
 .ollama-chat-view .ollama-send-button:active {
     transform: translateY(0) !important;
 }
+
+/* Stop button mode */
+.ollama-chat-view .ollama-send-button.stop-mode {
+    background: var(--text-error) !important;
+}
+
+.ollama-chat-view .ollama-send-button.stop-mode:hover {
+    background: var(--text-error) !important;
+    filter: brightness(1.1) !important;
+}
+
+.ollama-chat-view .ollama-send-button.stop-mode:active {
+    filter: brightness(0.9) !important;
+}
         `;
         document.head.appendChild(style);
     }
@@ -974,6 +1254,11 @@ class OllamaChatModule extends PluginModule {
 
         // Load embeddings
         await this.embeddingManager.load();
+
+        // Apply embedding model from settings (ensures consistency)
+        if (settings.embeddingModel) {
+            this.embeddingManager.metadata.model = settings.embeddingModel;
+        }
 
         // Register custom view
         this.plugin.registerView(
@@ -1068,7 +1353,6 @@ class OllamaChatModule extends PluginModule {
                 autoEmbedFolders.some(folder => file.path.startsWith(folder));
 
             if (shouldEmbed && this.embeddingManager.shouldReEmbed(file)) {
-                console.log(`Auto-embedding: ${file.path}`);
                 await this.embeddingManager.embedNote(file);
                 await this.embeddingManager.save();
             }
@@ -1287,6 +1571,51 @@ class OllamaChatModule extends PluginModule {
         // Embedding management
         containerEl.createEl('h4', { text: 'Embedding Management' });
 
+        // Test embedding connection
+        new Setting(containerEl)
+            .setName('Test Embedding API')
+            .setDesc('Test if Ollama can generate embeddings with your current model')
+            .addButton(button => button
+                .setButtonText('Test Embedding')
+                .onClick(async () => {
+                    button.setDisabled(true);
+                    button.setButtonText('Testing...');
+
+                    try {
+                        const testText = 'This is a test note to verify that embeddings are working correctly in Obsidian.';
+                        console.log('🧪 Testing embedding API...');
+                        console.log('   Text:', testText);
+                        console.log('   Model:', settings.embeddingModel || this.embeddingManager.metadata.model);
+                        console.log('   Ollama URL:', this.ollamaService.baseUrl);
+
+                        const embedding = await this.ollamaService.generateEmbedding(
+                            testText,
+                            settings.embeddingModel || this.embeddingManager.metadata.model
+                        );
+
+                        if (embedding && Array.isArray(embedding) && embedding.length > 0) {
+                            button.setButtonText('✓ Success!');
+                            new Notice(`✅ Embedding test successful!\nDimension: ${embedding.length}\nModel: ${settings.embeddingModel || this.embeddingManager.metadata.model}`, 5000);
+                            console.log('✅ Embedding test successful!');
+                            console.log('   Embedding dimension:', embedding.length);
+                            console.log('   First 5 values:', embedding.slice(0, 5));
+                        } else {
+                            button.setButtonText('✗ Failed');
+                            new Notice('❌ Embedding test failed: No embedding generated. Check console for details.', 5000);
+                            console.error('❌ Embedding test failed: received', embedding);
+                        }
+                    } catch (error) {
+                        button.setButtonText('✗ Error');
+                        new Notice(`❌ Embedding test error: ${error.message}`, 5000);
+                        console.error('❌ Embedding test error:', error);
+                    }
+
+                    setTimeout(() => {
+                        button.setDisabled(false);
+                        button.setButtonText('Test Embedding');
+                    }, 3000);
+                }));
+
         // Calculate embedding statistics
         const allFiles = this.app.vault.getMarkdownFiles();
         const totalNotes = allFiles.length;
@@ -1367,7 +1696,7 @@ class OllamaChatModule extends PluginModule {
                     });
 
                     button.setButtonText('Complete!');
-                    progressText.textContent = `✓ Successfully embedded ${count} notes`;
+                    progressText.textContent = `Successfully embedded ${count} notes`;
                     currentFileText.textContent = '';
                     new Notice(`Embedded ${count} notes`);
 

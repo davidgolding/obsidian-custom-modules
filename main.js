@@ -166,10 +166,11 @@ class CustomModulesSettingTab extends PluginSettingTab {
             if (isCore) hasCoreModules = true;
             else hasUserModules = true;
 
-            const moduleContainer = section.createEl('div', { cls: 'custom-module-container' });
+            const moduleCard = section.createEl('div', { cls: 'custom-module-card' });
+            const moduleHeader = moduleCard.createEl('div', { cls: 'custom-module-header' });
 
             // Main toggle for the module
-            new Setting(moduleContainer)
+            const headerSetting = new Setting(moduleHeader)
                 .setName(module.name)
                 .setDesc(module.description)
                 .addToggle(toggle => toggle
@@ -180,12 +181,55 @@ class CustomModulesSettingTab extends PluginSettingTab {
                         } else {
                             await this.plugin.registry.disableModule(module.id);
                         }
+                        // Update visual state
+                        moduleCard.toggleClass('module-enabled', value);
                     })
                 );
 
-            // Let the module add its own settings
-            const moduleSettingsContainer = moduleContainer.createEl('div', { cls: 'custom-module-settings' });
-            module.addSettings(moduleSettingsContainer);
+            // Add enabled/disabled class
+            if (this.plugin.settings.enabledModules[module.id]) {
+                moduleCard.addClass('module-enabled');
+            }
+
+            // Create collapsible settings container
+            const moduleSettingsContainer = moduleCard.createEl('div', { cls: 'custom-module-settings' });
+            const settingsContent = moduleSettingsContainer.createEl('div', { cls: 'custom-module-settings-content' });
+
+            // Add the module's settings
+            module.addSettings(settingsContent);
+
+            // Only make it collapsible if there are settings
+            if (settingsContent.children.length > 0) {
+                moduleCard.addClass('has-settings');
+
+                // Add expand/collapse button
+                const expandBtn = moduleHeader.createEl('div', {
+                    cls: 'module-expand-btn',
+                    attr: { 'aria-label': 'Expand settings' }
+                });
+                expandBtn.innerHTML = '<svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="6 9 12 15 18 9"></polyline></svg>';
+
+                // Toggle collapse on click
+                let isCollapsed = true;
+                moduleSettingsContainer.addClass('collapsed');
+
+                const toggleCollapse = () => {
+                    isCollapsed = !isCollapsed;
+                    moduleSettingsContainer.toggleClass('collapsed', isCollapsed);
+                    expandBtn.toggleClass('expanded', !isCollapsed);
+                };
+
+                expandBtn.addEventListener('click', toggleCollapse);
+                moduleHeader.addEventListener('click', (e) => {
+                    // Only toggle if clicking the header itself, not the toggle switch
+                    if (e.target === moduleHeader || e.target.closest('.setting-item-name') || e.target.closest('.setting-item-description')) {
+                        toggleCollapse();
+                    }
+                });
+
+                // Make header appear clickable
+                moduleHeader.addClass('clickable');
+            }
         }
 
         if (!hasCoreModules) {
@@ -252,6 +296,9 @@ class CustomModulesPlugin extends Plugin {
         // Load user modules
         await this.loadUserModules();
 
+        // Inject custom styles for settings panel
+        this.injectStyles();
+
         // Add settings tab
         this.addSettingTab(new CustomModulesSettingTab(this.app, this));
 
@@ -265,6 +312,237 @@ class CustomModulesPlugin extends Plugin {
             PluginModule: PluginModule,
             registry: this.registry
         };
+    }
+
+    injectStyles() {
+        const styleId = 'custom-modules-settings-styles';
+        if (document.getElementById(styleId)) return;
+
+        const style = document.createElement('style');
+        style.id = styleId;
+        style.textContent = `
+/* Custom Modules Plugin - Settings Panel Styles */
+
+.custom-modules-core-section,
+.custom-modules-user-section {
+    margin-bottom: 24px;
+}
+
+.custom-modules-core-section h3,
+.custom-modules-user-section h3 {
+    font-size: 1.1em;
+    font-weight: 600;
+    margin-bottom: 16px;
+    padding-bottom: 8px;
+    border-bottom: 2px solid var(--background-modifier-border);
+    color: var(--text-normal);
+}
+
+/* Module Card */
+.custom-module-card {
+    background: var(--background-primary);
+    border: 1px solid var(--background-modifier-border);
+    border-radius: 8px;
+    margin-bottom: 12px;
+    overflow: hidden;
+    transition: all 0.2s cubic-bezier(0.4, 0, 0.2, 1);
+}
+
+.custom-module-card:hover {
+    border-color: var(--background-modifier-border-hover);
+    box-shadow: 0 2px 8px rgba(0, 0, 0, 0.08);
+}
+
+.custom-module-card.module-enabled {
+    border-left: 3px solid var(--interactive-accent);
+}
+
+/* Module Header */
+.custom-module-header {
+    position: relative;
+    background: var(--background-secondary);
+    padding: 0;
+    border-bottom: 1px solid var(--background-modifier-border);
+}
+
+.custom-module-header.clickable {
+    cursor: pointer;
+}
+
+.custom-module-header.clickable:hover {
+    background: var(--background-secondary-alt);
+}
+
+.custom-module-header .setting-item {
+    padding: 12px 16px;
+    border: none;
+    margin: 0;
+}
+
+.custom-module-header .setting-item-name {
+    font-weight: 600;
+    font-size: 14px;
+    color: var(--text-normal);
+}
+
+.custom-module-header .setting-item-description {
+    font-size: 12px;
+    color: var(--text-muted);
+    margin-top: 4px;
+}
+
+/* Expand/Collapse Button */
+.module-expand-btn {
+    position: absolute;
+    right: 60px;
+    top: 50%;
+    transform: translateY(-50%);
+    width: 24px;
+    height: 24px;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    cursor: pointer;
+    border-radius: 4px;
+    transition: all 0.2s ease;
+    color: var(--text-muted);
+}
+
+.module-expand-btn:hover {
+    background: var(--background-modifier-hover);
+    color: var(--text-normal);
+}
+
+.module-expand-btn svg {
+    transition: transform 0.2s ease;
+}
+
+.module-expand-btn.expanded svg {
+    transform: rotate(180deg);
+}
+
+/* Module Settings Container */
+.custom-module-settings {
+    max-height: 0;
+    overflow: hidden;
+    transition: max-height 0.3s cubic-bezier(0.4, 0, 0.2, 1);
+}
+
+.custom-module-settings.collapsed {
+    max-height: 0 !important;
+}
+
+.custom-module-settings:not(.collapsed) {
+    max-height: 2000px;
+}
+
+.custom-module-settings-content {
+    padding: 16px;
+    background: var(--background-primary);
+}
+
+.custom-module-settings-content > * {
+    margin-bottom: 12px;
+}
+
+.custom-module-settings-content > *:last-child {
+    margin-bottom: 0;
+}
+
+/* Module settings - better hierarchy */
+.custom-module-settings-content .setting-item {
+    padding: 12px;
+    background: var(--background-secondary);
+    border-radius: 6px;
+    border: 1px solid var(--background-modifier-border);
+    margin-bottom: 8px;
+}
+
+.custom-module-settings-content .setting-item:hover {
+    background: var(--background-secondary-alt);
+}
+
+.custom-module-settings-content h4 {
+    font-size: 13px;
+    font-weight: 600;
+    color: var(--text-normal);
+    margin: 16px 0 12px 0;
+    padding: 8px 12px;
+    background: var(--background-modifier-border);
+    border-radius: 4px;
+}
+
+.custom-module-settings-content h4:first-child {
+    margin-top: 0;
+}
+
+/* Special styling for status containers (like Ollama embedding status) */
+.custom-module-settings-content > div[style*="background"] {
+    border: 1px solid var(--background-modifier-border);
+    box-shadow: 0 1px 3px rgba(0, 0, 0, 0.05);
+}
+
+/* Info Section */
+.custom-modules-info-section {
+    margin-top: 24px;
+    padding: 16px;
+    background: var(--background-secondary);
+    border-radius: 8px;
+    border: 1px dashed var(--background-modifier-border);
+}
+
+.custom-modules-info-section h3 {
+    font-size: 14px;
+    font-weight: 600;
+    margin-bottom: 8px;
+    color: var(--text-normal);
+}
+
+.custom-modules-info-section p {
+    font-size: 13px;
+    color: var(--text-muted);
+    line-height: 1.5;
+}
+
+/* Better spacing for setting items in general */
+.setting-item-name {
+    font-weight: 500;
+}
+
+.setting-item-description {
+    opacity: 0.8;
+}
+
+/* Responsive improvements */
+@media (max-width: 768px) {
+    .custom-module-card {
+        margin-bottom: 8px;
+    }
+
+    .custom-module-header .setting-item {
+        padding: 10px 12px;
+    }
+
+    .custom-module-settings-content {
+        padding: 12px;
+    }
+}
+
+/* Visual indicator for modules without settings */
+.custom-module-card:not(.has-settings) {
+    background: var(--background-primary-alt);
+}
+
+.custom-module-card:not(.has-settings) .custom-module-header {
+    border-bottom: none;
+}
+
+/* Improved toggle switch visibility */
+.custom-module-header .checkbox-container {
+    flex-shrink: 0;
+}
+        `;
+        document.head.appendChild(style);
     }
 
     async onunload() {
