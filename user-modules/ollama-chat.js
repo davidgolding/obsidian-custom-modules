@@ -340,12 +340,18 @@ class EmbeddingManager {
             await this.load();
         }
 
+        console.log('🔍 [RAG] Searching similar notes for query:', query);
+        console.log('   Loaded embeddings count:', Object.keys(this.embeddings).length);
+        console.log('   Embedding model:', this.metadata.model);
+
         // Generate query embedding
         const queryEmbedding = await this.ollamaService.generateEmbedding(query, this.metadata.model);
         if (!queryEmbedding) {
-            console.error('Failed to generate query embedding');
+            console.error('❌ Failed to generate query embedding');
             return [];
         }
+
+        console.log('   Query embedding dimension:', queryEmbedding.length);
 
         // Calculate similarities
         const results = [];
@@ -356,7 +362,14 @@ class EmbeddingManager {
 
         // Sort by similarity and return top K
         results.sort((a, b) => b.similarity - a.similarity);
-        return results.slice(0, topK);
+        const topResults = results.slice(0, topK);
+
+        console.log(`   Found ${results.length} notes, returning top ${topK}:`);
+        topResults.forEach((r, i) => {
+            console.log(`   ${i + 1}. ${r.path} (similarity: ${r.similarity.toFixed(4)})`);
+        });
+
+        return topResults;
     }
 }
 
@@ -370,7 +383,15 @@ class ChatManager {
         this.embeddingManager = embeddingManager;
         this.messages = [];
         this.pinnedNotes = new Set();
-        this.systemPrompt = "You are a helpful assistant with access to the user's notes. Use the provided context to answer questions accurately.";
+        this.systemPrompt = `You are an AI assistant integrated into Obsidian. You HAVE DIRECT ACCESS to the user's notes through the context provided below.
+
+IMPORTANT: When the user asks "where in my notes" or similar questions, you must:
+1. Search through the provided notes context
+2. Quote specific passages that answer their question
+3. Reference the note names where you found the information
+4. NEVER say you don't have access - you DO have access through the provided context
+
+Always cite which notes contain relevant information and quote the relevant passages.`;
     }
 
     setSystemPrompt(prompt) {
@@ -401,6 +422,10 @@ class ChatManager {
         const contextParts = [];
         const sources = [];
 
+        console.log('📝 [RAG] Building context for query');
+        console.log('   Pinned notes:', this.pinnedNotes.size);
+        console.log('   Retrieving top', topK, 'similar notes');
+
         // 1. Add pinned notes
         for (const path of this.pinnedNotes) {
             const file = this.app.vault.getAbstractFileByPath(path);
@@ -408,6 +433,7 @@ class ChatManager {
                 const content = await this.app.vault.read(file);
                 contextParts.push(`Note: ${path}\n${content}\n`);
                 sources.push({ path, type: 'pinned' });
+                console.log('   ✓ Added pinned note:', path);
             }
         }
 
@@ -417,6 +443,7 @@ class ChatManager {
         for (const result of similarNotes) {
             // Skip if already pinned
             if (this.pinnedNotes.has(result.path)) {
+                console.log('   ⊘ Skipping (already pinned):', result.path);
                 continue;
             }
 
@@ -429,10 +456,18 @@ class ChatManager {
                     type: 'retrieved',
                     similarity: result.similarity
                 });
+                console.log('   ✓ Added retrieved note:', result.path, `(similarity: ${result.similarity.toFixed(4)})`);
+            } else {
+                console.log('   ✗ File not found:', result.path);
             }
         }
 
         const context = contextParts.join('\n---\n\n');
+        console.log('📦 [RAG] Context built:');
+        console.log('   Total context parts:', contextParts.length);
+        console.log('   Total context length:', context.length, 'characters');
+        console.log('   Sources:', sources.length);
+
         return { context, sources };
     }
 
@@ -445,10 +480,14 @@ class ChatManager {
 
         // Add context if available
         if (context) {
-            messages.push({
+            const contextMessage = {
                 role: 'system',
-                content: `Here are relevant notes from the vault:\n\n${context}`
-            });
+                content: `CONTEXT - The following notes from the vault are relevant to the user's question. Read them carefully and answer based on their contents:\n\n${context}\n\n--- END OF CONTEXT ---\n\nNow answer the user's question using ONLY the information from these notes. Quote specific passages and cite which notes they came from.`
+            };
+            messages.push(contextMessage);
+            console.log('💬 [RAG] Added context message to LLM (length:', contextMessage.content.length, 'chars)');
+        } else {
+            console.log('⚠️ [RAG] No context available - no notes will be provided to LLM!');
         }
 
         // Add recent conversation history (last 5 exchanges)
@@ -457,6 +496,11 @@ class ChatManager {
 
         // Add current query
         messages.push({ role: 'user', content: userQuery });
+
+        console.log('📤 [RAG] Final message count being sent to LLM:', messages.length);
+        console.log('   - System messages:', messages.filter(m => m.role === 'system').length);
+        console.log('   - History messages:', recentMessages.length);
+        console.log('   - User message: 1');
 
         return { messages, sources };
     }
@@ -1269,6 +1313,10 @@ class OllamaChatModule extends PluginModule {
         this.ollamaService = null;
         this.embeddingManager = null;
         this.fileWatcherDebounced = null;
+        this.viewRegistered = false;
+        this.ribbonIconAdded = false;
+        this.commandAdded = false;
+        this.fileWatcherSetup = false;
     }
 
     async onEnable() {
@@ -1291,36 +1339,48 @@ class OllamaChatModule extends PluginModule {
             this.embeddingManager.metadata.model = settings.embeddingModel;
         }
 
-        // Register custom view
-        this.plugin.registerView(
-            VIEW_TYPE_OLLAMA_CHAT,
-            (leaf) => new OllamaChatView(leaf, this)
-        );
+        // Register custom view (only if not already registered)
+        if (!this.viewRegistered) {
+            this.plugin.registerView(
+                VIEW_TYPE_OLLAMA_CHAT,
+                (leaf) => new OllamaChatView(leaf, this)
+            );
+            this.viewRegistered = true;
+        }
 
-        // Add ribbon icon
-        this.plugin.addRibbonIcon('message-circle', 'Open Ollama Chat', () => {
-            this.activateView();
-        });
+        // Add ribbon icon (only once)
+        if (!this.ribbonIconAdded) {
+            this.plugin.addRibbonIcon('message-circle', 'Open Ollama Chat', () => {
+                this.activateView();
+            });
+            this.ribbonIconAdded = true;
+        }
 
-        // Add command to pin current note
-        this.plugin.addCommand({
-            id: 'ollama-chat-pin-note',
-            name: 'Pin current note for chat context',
-            callback: () => {
-                const file = this.app.workspace.getActiveFile();
-                if (file) {
-                    const view = this.getView();
-                    if (view?.chatManager) {
-                        view.chatManager.pinNote(file.path);
-                        view.updatePinnedNotesUI();
-                        new Notice(`Pinned: ${file.basename}`);
+        // Add command to pin current note (only once)
+        if (!this.commandAdded) {
+            this.plugin.addCommand({
+                id: 'ollama-chat-pin-note',
+                name: 'Pin current note for chat context',
+                callback: () => {
+                    const file = this.app.workspace.getActiveFile();
+                    if (file) {
+                        const view = this.getView();
+                        if (view?.chatManager) {
+                            view.chatManager.pinNote(file.path);
+                            view.updatePinnedNotesUI();
+                            new Notice(`Pinned: ${file.basename}`);
+                        }
                     }
                 }
-            }
-        });
+            });
+            this.commandAdded = true;
+        }
 
-        // Setup file watcher for auto-embedding
-        this.setupFileWatcher();
+        // Setup file watcher for auto-embedding (only once)
+        if (!this.fileWatcherSetup) {
+            this.setupFileWatcher();
+            this.fileWatcherSetup = true;
+        }
 
         // Test connection
         const connected = await this.ollamaService.testConnection();
@@ -1594,7 +1654,15 @@ class OllamaChatModule extends PluginModule {
             .setDesc('Instructions for the AI assistant')
             .addTextArea(text => text
                 .setPlaceholder('You are a helpful assistant...')
-                .setValue(settings.systemPrompt || "You are a helpful assistant with access to the user's notes. Use the provided context to answer questions accurately.")
+                .setValue(settings.systemPrompt || `You are an AI assistant integrated into Obsidian. You HAVE DIRECT ACCESS to the user's notes through the context provided below.
+
+IMPORTANT: When the user asks "where in my notes" or similar questions, you must:
+1. Search through the provided notes context
+2. Quote specific passages that answer their question
+3. Reference the note names where you found the information
+4. NEVER say you don't have access - you DO have access through the provided context
+
+Always cite which notes contain relevant information and quote the relevant passages.`)
                 .onChange(async (value) => {
                     await this.saveSettings({ ...settings, systemPrompt: value });
                 }));

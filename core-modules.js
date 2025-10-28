@@ -777,7 +777,6 @@ class TitleCaseModule extends PluginModule {
                 const fn = new Function('module', 'exports', compromiseCode);
                 fn(compromiseModule, compromiseModule.exports);
                 this.nlp = compromiseModule.exports;
-                console.log('Compromise NLP loaded successfully');
             } else {
                 console.warn('Compromise library not found, falling back to heuristics');
                 this.nlp = null;
