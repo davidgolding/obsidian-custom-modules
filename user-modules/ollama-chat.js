@@ -216,7 +216,9 @@ class EmbeddingManager {
 
     async load() {
         try {
+            // Try vault API first (works for most files)
             const file = this.vault.getAbstractFileByPath(this.embeddingsPath);
+
             if (file instanceof TFile) {
                 const content = await this.vault.read(file);
                 const data = JSON.parse(content);
@@ -224,10 +226,21 @@ class EmbeddingManager {
                 this.metadata = data.metadata || this.metadata;
                 this.isLoaded = true;
             } else {
-                this.isLoaded = true;
+                // Fallback to adapter for files in .obsidian directory
+                try {
+                    const content = await this.vault.adapter.read(this.embeddingsPath);
+                    const data = JSON.parse(content);
+                    this.embeddings = data.notes || {};
+                    this.metadata = data.metadata || this.metadata;
+                    this.isLoaded = true;
+                } catch (adapterError) {
+                    // File doesn't exist yet, start fresh
+                    this.isLoaded = true;
+                }
             }
         } catch (error) {
-            console.error('Error loading embeddings:', error);
+            console.error('Error loading embeddings:', error.message);
+            this.embeddings = {};
             this.isLoaded = true;
         }
     }
@@ -242,26 +255,8 @@ class EmbeddingManager {
                 }
             }, null, 2);
 
-            const file = this.vault.getAbstractFileByPath(this.embeddingsPath);
-            if (file instanceof TFile) {
-                // File exists, modify it
-                await this.vault.modify(file, data);
-            } else {
-                // File doesn't exist, try to create it
-                try {
-                    await this.vault.create(this.embeddingsPath, data);
-                } catch (createError) {
-                    // If create fails because file already exists, try to modify
-                    if (createError.message?.includes('already exists')) {
-                        const existingFile = this.vault.getAbstractFileByPath(this.embeddingsPath);
-                        if (existingFile instanceof TFile) {
-                            await this.vault.modify(existingFile, data);
-                        }
-                    } else {
-                        throw createError;
-                    }
-                }
-            }
+            // Use adapter.write for reliable file operations in .obsidian directory
+            await this.vault.adapter.write(this.embeddingsPath, data);
         } catch (error) {
             console.error('Error saving embeddings:', error.message);
         }
@@ -642,6 +637,8 @@ class OllamaChatView extends ItemView {
         const pinnedNotes = this.chatManager.getPinnedNotes();
 
         if (pinnedNotes.length > 0) {
+            this.pinnedNotesContainer.addClass('has-notes');
+
             const pinnedLabel = this.pinnedNotesContainer.createDiv({ cls: 'pinned-label' });
             pinnedLabel.textContent = 'Pinned:';
 
@@ -659,6 +656,8 @@ class OllamaChatView extends ItemView {
                     this.updatePinnedNotesUI();
                 });
             }
+        } else {
+            this.pinnedNotesContainer.removeClass('has-notes');
         }
     }
 
@@ -690,10 +689,8 @@ class OllamaChatView extends ItemView {
                 settings.retrievalCount || 5
             );
 
-            // Remove loading indicator
-            loadingIndicator.remove();
-
             let fullResponse = '';
+            let firstChunk = true;
 
             // Stream response
             const stream = this.module.ollamaService.chat(messages, this.currentModel, {
@@ -702,13 +699,19 @@ class OllamaChatView extends ItemView {
             });
 
             for await (const chunk of stream) {
+                // Remove loading indicator on first chunk
+                if (firstChunk) {
+                    loadingIndicator.remove();
+                    firstChunk = false;
+                }
+
                 fullResponse += chunk;
-                // Update with plain text during streaming for performance
-                contentEl.textContent = fullResponse;
+                // Update with plain text during streaming for performance, add cursor
+                contentEl.textContent = fullResponse + '▊';
                 this.messagesContainer.scrollTop = this.messagesContainer.scrollHeight;
             }
 
-            // After streaming is complete, render as markdown
+            // After streaming is complete, render as markdown (remove cursor)
             contentEl.empty();
             await this.renderMarkdown(fullResponse, contentEl);
 
@@ -722,6 +725,10 @@ class OllamaChatView extends ItemView {
             }
 
         } catch (error) {
+            // Remove loading indicator if still present
+            if (loadingIndicator && loadingIndicator.parentElement) {
+                loadingIndicator.remove();
+            }
             // Only show error if it wasn't aborted by user
             if (error.name !== 'AbortError') {
                 contentEl.textContent = `Error: ${error.message}`;
@@ -881,22 +888,46 @@ class OllamaChatView extends ItemView {
 }
 
 .ollama-chat-view .ollama-model-select {
-    padding: 4px 8px !important;
+    padding: 6px 12px !important;
+    padding-right: 28px !important;
     border-radius: 6px !important;
     border: 1px solid var(--background-modifier-border) !important;
     background: var(--background-primary) !important;
     font-size: 13px !important;
     cursor: pointer !important;
+    font-weight: 500 !important;
+    appearance: none !important;
+    -webkit-appearance: none !important;
+    -moz-appearance: none !important;
+    background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='12' height='12' viewBox='0 0 12 12'%3E%3Cpath fill='%23666' d='M6 9L1 4h10z'/%3E%3C/svg%3E") !important;
+    background-repeat: no-repeat !important;
+    background-position: right 8px center !important;
+    transition: all 0.2s ease !important;
+}
+
+.ollama-chat-view .ollama-model-select:hover {
+    border-color: var(--interactive-accent) !important;
+    background-color: var(--background-modifier-hover) !important;
+}
+
+.ollama-chat-view .ollama-model-select:focus {
+    outline: none !important;
+    border-color: var(--interactive-accent) !important;
+    box-shadow: 0 0 0 2px var(--interactive-accent-hover) !important;
 }
 
 .ollama-chat-view .ollama-pinned-notes {
     padding: 8px 16px !important;
     background: var(--background-secondary-alt) !important;
     border-bottom: 1px solid var(--background-modifier-border) !important;
-    display: flex !important;
+    display: none !important;
     flex-wrap: wrap !important;
     gap: 6px !important;
     align-items: center !important;
+}
+
+.ollama-chat-view .ollama-pinned-notes.has-notes {
+    display: flex !important;
 }
 
 .ollama-chat-view .pinned-label {
