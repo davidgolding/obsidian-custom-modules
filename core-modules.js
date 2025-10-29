@@ -1334,6 +1334,855 @@ class TitleCaseModule extends PluginModule {
     }
 }
 
+// Rich Text Formatting Module
+class RichTextFormattingModule extends PluginModule {
+    constructor(plugin) {
+        super(plugin);
+        this.id = 'core-rich-text-formatting';
+        this.name = 'Rich Text Formatting';
+        this.description = 'Apple-style formatting toolbar for markdown editing';
+        this.activeLeaves = new Set();
+        this.styleEl = null;
+        this.cursorMonitorInterval = null;
+    }
+
+    async onEnable() {
+        // Inject CSS
+        this.injectStyles();
+
+        // Add toolbars to existing markdown views
+        this.addToolbarToExistingViews();
+
+        // Register events
+        this.plugin.registerEvent(
+            this.app.workspace.on('layout-change', () => {
+                this.addToolbarToExistingViews();
+            })
+        );
+
+        // Monitor cursor position for context updates
+        this.startCursorMonitoring();
+    }
+
+    async onDisable() {
+        this.removeAllToolbars();
+        this.stopCursorMonitoring();
+
+        if (this.styleEl) {
+            this.styleEl.remove();
+            this.styleEl = null;
+        }
+    }
+
+    injectStyles() {
+        const styleId = 'rich-text-formatting-styles';
+        if (document.getElementById(styleId)) return;
+
+        this.styleEl = document.createElement('style');
+        this.styleEl.id = styleId;
+        this.styleEl.textContent = `
+/* Rich Text Formatting Toolbar - Apple-inspired design */
+.rtf-toolbar {
+    display: flex !important;
+    align-items: center !important;
+    gap: 4px !important;
+    padding: 6px 12px !important;
+    background: rgba(255, 255, 255, 0.95) !important;
+    border-bottom: 1px solid rgba(0, 0, 0, 0.08) !important;
+    font-family: -apple-system, BlinkMacSystemFont, "SF Pro Text", "Segoe UI", Roboto, Oxygen, Ubuntu, sans-serif !important;
+    backdrop-filter: blur(20px) !important;
+    -webkit-backdrop-filter: blur(20px) !important;
+    position: relative !important;
+    z-index: 10 !important;
+}
+
+.theme-dark .rtf-toolbar {
+    background: rgba(30, 30, 30, 0.95) !important;
+    border-bottom: 1px solid rgba(255, 255, 255, 0.08) !important;
+}
+
+.rtf-heading-select {
+    padding: 4px 24px 4px 8px !important;
+    background-color: rgba(0, 0, 0, 0.04) !important;
+    border: 1px solid rgba(0, 0, 0, 0.08) !important;
+    border-radius: 6px !important;
+    font-size: 12px !important;
+    font-weight: 500 !important;
+    color: rgba(0, 0, 0, 0.85) !important;
+    cursor: pointer !important;
+    appearance: none !important;
+    -webkit-appearance: none !important;
+    -moz-appearance: none !important;
+    background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='10' height='10' viewBox='0 0 24 24' fill='none' stroke='%23666' stroke-width='2' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpolyline points='6 9 12 15 18 9'%3E%3C/polyline%3E%3C/svg%3E") !important;
+    background-repeat: no-repeat !important;
+    background-position: right 6px center !important;
+    background-size: 10px !important;
+    transition: all 0.15s ease !important;
+    outline: none !important;
+    min-width: 90px !important;
+}
+
+.rtf-heading-select option {
+    background-color: var(--background-primary) !important;
+    background-image: none !important;
+    color: var(--text-normal) !important;
+}
+
+.theme-dark .rtf-heading-select {
+    background-color: rgba(255, 255, 255, 0.06) !important;
+    border: 1px solid rgba(255, 255, 255, 0.1) !important;
+    color: rgba(255, 255, 255, 0.85) !important;
+    background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='10' height='10' viewBox='0 0 24 24' fill='none' stroke='%23aaa' stroke-width='2' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpolyline points='6 9 12 15 18 9'%3E%3C/polyline%3E%3C/svg%3E") !important;
+}
+
+.rtf-heading-select:hover {
+    background: rgba(0, 0, 0, 0.06) !important;
+    border-color: rgba(0, 0, 0, 0.12) !important;
+}
+
+.theme-dark .rtf-heading-select:hover {
+    background: rgba(255, 255, 255, 0.08) !important;
+    border-color: rgba(255, 255, 255, 0.15) !important;
+}
+
+.rtf-heading-select:focus {
+    border-color: rgb(0, 122, 255) !important;
+    box-shadow: 0 0 0 3px rgba(0, 122, 255, 0.15) !important;
+}
+
+.rtf-separator {
+    width: 1px !important;
+    height: 20px !important;
+    background: rgba(0, 0, 0, 0.1) !important;
+    margin: 0 4px !important;
+}
+
+.theme-dark .rtf-separator {
+    background: rgba(255, 255, 255, 0.15) !important;
+}
+
+.rtf-format-btn {
+    display: flex !important;
+    align-items: center !important;
+    justify-content: center !important;
+    width: 28px !important;
+    height: 28px !important;
+    background: transparent !important;
+    border: none !important;
+    border-radius: 6px !important;
+    cursor: pointer !important;
+    color: rgba(0, 0, 0, 0.7) !important;
+    transition: all 0.15s ease !important;
+    padding: 0 !important;
+    position: relative !important;
+}
+
+.theme-dark .rtf-format-btn {
+    color: rgba(255, 255, 255, 0.7) !important;
+}
+
+.rtf-format-btn:hover {
+    background: rgba(0, 0, 0, 0.06) !important;
+    color: rgba(0, 0, 0, 0.9) !important;
+}
+
+.theme-dark .rtf-format-btn:hover {
+    background: rgba(255, 255, 255, 0.1) !important;
+    color: rgba(255, 255, 255, 0.9) !important;
+}
+
+.rtf-format-btn:active {
+    transform: scale(0.95) !important;
+}
+
+.rtf-format-btn.active {
+    background: rgb(0, 122, 255) !important;
+    color: white !important;
+}
+
+.theme-dark .rtf-format-btn.active {
+    background: rgb(10, 132, 255) !important;
+}
+
+.rtf-format-btn.active:hover {
+    background: rgb(0, 112, 245) !important;
+}
+
+.theme-dark .rtf-format-btn.active:hover {
+    background: rgb(20, 142, 255) !important;
+}
+
+.rtf-format-btn svg {
+    width: 16px !important;
+    height: 16px !important;
+    stroke-width: 2 !important;
+}
+
+/* Tooltip */
+.rtf-format-btn::after {
+    content: attr(aria-label) !important;
+    position: absolute !important;
+    bottom: -28px !important;
+    left: 50% !important;
+    transform: translateX(-50%) scale(0.9) !important;
+    background: rgba(0, 0, 0, 0.85) !important;
+    color: white !important;
+    padding: 4px 8px !important;
+    border-radius: 4px !important;
+    font-size: 11px !important;
+    font-weight: 500 !important;
+    white-space: nowrap !important;
+    opacity: 0 !important;
+    pointer-events: none !important;
+    transition: all 0.2s ease !important;
+    z-index: 1000 !important;
+}
+
+.rtf-format-btn:hover::after {
+    opacity: 1 !important;
+    transform: translateX(-50%) scale(1) !important;
+}
+`;
+        document.head.appendChild(this.styleEl);
+    }
+
+    addToolbarToExistingViews() {
+        const leaves = this.app.workspace.getLeavesOfType('markdown');
+
+        leaves.forEach(leaf => {
+            if (!this.activeLeaves.has(leaf)) {
+                this.addToolbarToView(leaf);
+                this.activeLeaves.add(leaf);
+            }
+        });
+    }
+
+    addToolbarToView(leaf) {
+        const view = leaf.view;
+        if (!view || !view.containerEl) return;
+
+        // Check if toolbar already exists
+        if (view.containerEl.querySelector('.rtf-toolbar')) return;
+
+        // Insert toolbar at the top of the view content
+        const viewContent = view.containerEl.querySelector('.view-content');
+        if (!viewContent) return;
+
+        const toolbar = this.createToolbar(view);
+        viewContent.prepend(toolbar);
+
+        // Store reference for updates
+        toolbar.dataset.leafId = leaf.id;
+    }
+
+    createToolbar(view) {
+        const toolbar = document.createElement('div');
+        toolbar.className = 'rtf-toolbar';
+
+        // Heading select
+        const headingSelect = document.createElement('select');
+        headingSelect.className = 'rtf-heading-select';
+        const headingOptions = [
+            { value: 'body', label: 'Body' },
+            { value: 'h1', label: 'Heading 1' },
+            { value: 'h2', label: 'Heading 2' },
+            { value: 'h3', label: 'Heading 3' },
+            { value: 'h4', label: 'Heading 4' },
+            { value: 'h5', label: 'Heading 5' },
+            { value: 'h6', label: 'Heading 6' }
+        ];
+
+        headingOptions.forEach(opt => {
+            const option = document.createElement('option');
+            option.value = opt.value;
+            option.textContent = opt.label;
+            headingSelect.appendChild(option);
+        });
+
+        headingSelect.addEventListener('change', (e) => {
+            this.applyHeading(view, e.target.value);
+        });
+
+        toolbar.appendChild(headingSelect);
+        toolbar.headingSelect = headingSelect;
+
+        // Separator
+        const separator = document.createElement('div');
+        separator.className = 'rtf-separator';
+        toolbar.appendChild(separator);
+
+        // Format buttons
+        const formats = [
+            { id: 'bold', label: 'Bold', icon: this.getLucideIcon('bold'), format: '**' },
+            { id: 'italic', label: 'Italic', icon: this.getLucideIcon('italic'), format: '*' },
+            { id: 'code', label: 'Code', icon: this.getLucideIcon('code'), format: '`' },
+            { id: 'highlight', label: 'Highlight', icon: this.getLucideIcon('highlighter'), format: '==' },
+            { id: 'strikethrough', label: 'Strikethrough', icon: this.getLucideIcon('strikethrough'), format: '~~' },
+            { id: 'math', label: 'Math', icon: this.getLucideIcon('function-square'), format: '$' },
+            { id: 'comment', label: 'Comment', icon: this.getLucideIcon('message-circle-off'), format: 'comment' }
+        ];
+
+        const buttons = {};
+        formats.forEach(fmt => {
+            const btn = document.createElement('button');
+            btn.className = 'rtf-format-btn';
+            btn.setAttribute('aria-label', fmt.label);
+            btn.innerHTML = fmt.icon;
+            btn.addEventListener('click', () => {
+                this.applyFormat(view, fmt.id, fmt.format);
+            });
+            toolbar.appendChild(btn);
+            buttons[fmt.id] = btn;
+        });
+
+        toolbar.formatButtons = buttons;
+
+        return toolbar;
+    }
+
+    getLucideIcon(name) {
+        const icons = {
+            'bold': '<svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M6 12h9a4 4 0 0 1 0 8H7a1 1 0 0 1-1-1V5a1 1 0 0 1 1-1h7a4 4 0 0 1 0 8"/></svg>',
+            'italic': '<svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><line x1="19" x2="10" y1="4" y2="4"/><line x1="14" x2="5" y1="20" y2="20"/><line x1="15" x2="9" y1="4" y2="20"/></svg>',
+            'code': '<svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="16 18 22 12 16 6"/><polyline points="8 6 2 12 8 18"/></svg>',
+            'highlighter': '<svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="m9 11-6 6v3h9l3-3"/><path d="m22 12-4.6 4.6a2 2 0 0 1-2.8 0l-5.2-5.2a2 2 0 0 1 0-2.8L14 4"/></svg>',
+            'strikethrough': '<svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M16 4H9a3 3 0 0 0-2.83 4"/><path d="M14 12a4 4 0 0 1 0 8H6"/><line x1="4" x2="20" y1="12" y2="12"/></svg>',
+            'function-square': '<svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect width="18" height="18" x="3" y="3" rx="2" ry="2"/><path d="M9 17c2 0 2.8-1 2.8-2.8V10c0-2 1-3.3 3.2-3"/><path d="M9 11.2h5.7"/></svg>',
+            'message-circle-off': '<svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M20.5 14.9A9 9 0 0 0 9.1 3.5"/><path d="m2 2 20 20"/><path d="M5.6 5.6C3 8.3 2.2 12.5 4 16l-2 6 6-2c3.4 1.8 7.6 1.1 10.3-1.7"/></svg>'
+        };
+        return icons[name] || '';
+    }
+
+    startCursorMonitoring() {
+        // Update context every 200ms when cursor might have moved
+        this.cursorMonitorInterval = setInterval(() => {
+            const activeView = this.app.workspace.getActiveViewOfType(MarkdownView);
+            if (activeView) {
+                this.updateToolbarContext(activeView);
+            }
+        }, 200);
+    }
+
+    stopCursorMonitoring() {
+        if (this.cursorMonitorInterval) {
+            clearInterval(this.cursorMonitorInterval);
+            this.cursorMonitorInterval = null;
+        }
+    }
+
+    updateToolbarContext(view) {
+        const toolbar = view.containerEl.querySelector('.rtf-toolbar');
+        if (!toolbar) return;
+
+        const editor = view.editor;
+        if (!editor) return;
+
+        // Get cursor position
+        const cursor = editor.getCursor();
+        const line = editor.getLine(cursor.line);
+
+        // Update heading select
+        const headingMatch = line.match(/^(#{1,6})\s/);
+        if (headingMatch) {
+            const level = headingMatch[1].length;
+            toolbar.headingSelect.value = `h${level}`;
+        } else {
+            toolbar.headingSelect.value = 'body';
+        }
+
+        // Get text around cursor for format detection
+        const selection = editor.getSelection();
+        const textToCheck = selection || this.getWordAtCursor(editor, cursor);
+
+        // Update format button states
+        const formats = {
+            'bold': /\*\*.*\*\*/,
+            'italic': /\*.*\*|_.*_/,
+            'code': /`.*`/,
+            'highlight': /==.*==/,
+            'strikethrough': /~~.*~~/,
+            'math': /\$.*\$/,
+            'comment': /<!--.*-->/
+        };
+
+        Object.keys(formats).forEach(formatId => {
+            const btn = toolbar.formatButtons?.[formatId];
+            if (btn) {
+                const isActive = this.isFormatActive(editor, cursor, formatId);
+                btn.classList.toggle('active', isActive);
+            }
+        });
+    }
+
+    getWordAtCursor(editor, cursor) {
+        const line = editor.getLine(cursor.line);
+        const pos = cursor.ch;
+
+        let start = pos;
+        let end = pos;
+
+        // Expand to word boundaries
+        while (start > 0 && !/\s/.test(line[start - 1])) start--;
+        while (end < line.length && !/\s/.test(line[end])) end++;
+
+        return line.substring(start, end);
+    }
+
+    isFormatActive(editor, cursor, formatId) {
+        const line = editor.getLine(cursor.line);
+        const ch = cursor.ch;
+
+        // Special handling for bold/italic to avoid conflicts
+        if (formatId === 'bold') {
+            // Check for ** markers, but also check for *** (bold+italic)
+            const boldPattern = /\*\*\*([^*]+)\*\*\*|\*\*([^*]+)\*\*/g;
+            let match;
+            while ((match = boldPattern.exec(line)) !== null) {
+                const start = match.index;
+                const end = start + match[0].length;
+                if (ch >= start && ch <= end) {
+                    return true;
+                }
+            }
+            return false;
+        }
+
+        if (formatId === 'italic') {
+            // For italic, we need to be careful not to match inside bold
+            // Check for *** (bold+italic), ** (bold only), or * (italic only)
+            const boldItalicPattern = /\*\*\*([^*]+)\*\*\*/g;
+            const boldPattern = /\*\*([^*]+)\*\*/g;
+            const italicPattern = /(?<!\*)\*([^*]+)\*(?!\*)|_([^_]+)_/g;
+
+            // First check if we're in bold+italic
+            let match;
+            while ((match = boldItalicPattern.exec(line)) !== null) {
+                const start = match.index;
+                const end = start + match[0].length;
+                if (ch >= start && ch <= end) {
+                    return true; // In bold+italic, italic is active
+                }
+            }
+
+            // Reset pattern and check we're not in bold-only
+            boldPattern.lastIndex = 0;
+            while ((match = boldPattern.exec(line)) !== null) {
+                const start = match.index;
+                const end = start + match[0].length;
+                if (ch >= start && ch <= end) {
+                    return false; // In bold-only, italic is NOT active
+                }
+            }
+
+            // Check for italic-only (but use simpler pattern since lookbehind isn't universally supported)
+            // We'll manually verify the match isn't inside bold
+            const simpleItalicPattern = /\*([^*]+)\*|_([^_]+)_/g;
+            while ((match = simpleItalicPattern.exec(line)) !== null) {
+                const start = match.index;
+                const end = start + match[0].length;
+                if (ch >= start && ch <= end) {
+                    // Double-check this isn't inside bold markers
+                    const charBefore = start > 0 ? line[start - 1] : '';
+                    const charAfter = end < line.length ? line[end] : '';
+                    if (charBefore === '*' || charAfter === '*') {
+                        continue; // Skip, this is inside bold markers
+                    }
+                    return true;
+                }
+            }
+            return false;
+        }
+
+        // For other formats, use standard pattern matching
+        const patterns = {
+            'code': /`([^`]+)`/g,
+            'highlight': /==(.*?)==/g,
+            'strikethrough': /~~(.*?)~~/g,
+            'math': /\$\$([^$]+)\$\$|\$([^$]+)\$/g,
+            'comment': /<!--(.*?)-->/g
+        };
+
+        const pattern = patterns[formatId];
+        if (!pattern) return false;
+
+        let match;
+        while ((match = pattern.exec(line)) !== null) {
+            const start = match.index;
+            const end = start + match[0].length;
+            if (ch >= start && ch <= end) {
+                return true;
+            }
+        }
+
+        return false;
+    }
+
+    applyHeading(view, level) {
+        const editor = view.editor;
+        if (!editor) return;
+
+        const cursor = editor.getCursor();
+        const line = editor.getLine(cursor.line);
+
+        // Remove existing heading markers
+        const cleanLine = line.replace(/^#{1,6}\s/, '');
+
+        // Apply new heading
+        let newLine;
+        if (level === 'body') {
+            newLine = cleanLine;
+        } else {
+            const headingLevel = parseInt(level.replace('h', ''));
+            newLine = '#'.repeat(headingLevel) + ' ' + cleanLine;
+        }
+
+        editor.setLine(cursor.line, newLine);
+    }
+
+    applyFormat(view, formatId, format) {
+        const editor = view.editor;
+        if (!editor) return;
+
+        if (formatId === 'comment') {
+            this.applyCommentFormat(editor);
+            return;
+        }
+
+        if (formatId === 'math') {
+            this.applyMathFormat(editor);
+            return;
+        }
+
+        // Handle simple wrap formats with proper toggle detection
+        const selection = editor.getSelection();
+
+        if (selection) {
+            // User has selected text - save positions
+            const from = editor.getCursor('from');
+            const to = editor.getCursor('to');
+
+            // Get the full line to check surrounding text
+            const fromLine = editor.getLine(from.line);
+            const toLine = editor.getLine(to.line);
+
+            // Check if format markers exist IMMEDIATELY adjacent to the selection
+            const formatLen = format.length;
+            const beforeText = fromLine.substring(Math.max(0, from.ch - formatLen), from.ch);
+            const afterText = toLine.substring(to.ch, Math.min(toLine.length, to.ch + formatLen));
+
+            if (beforeText === format && afterText === format) {
+                // Format exists immediately around selection - remove it
+                if (from.line === to.line) {
+                    // Single line selection
+                    const newLine = fromLine.substring(0, from.ch - formatLen) +
+                                  selection +
+                                  fromLine.substring(to.ch + formatLen);
+                    editor.setLine(from.line, newLine);
+
+                    // Restore selection to the text content (without markers)
+                    // Use setTimeout to ensure the line update completes first
+                    setTimeout(() => {
+                        editor.setSelection(
+                            { line: from.line, ch: from.ch - formatLen },
+                            { line: to.line, ch: to.ch - formatLen }
+                        );
+                    }, 0);
+                } else {
+                    // Multi-line selection - remove start marker from first line
+                    const newFromLine = fromLine.substring(0, from.ch - formatLen) +
+                                       fromLine.substring(from.ch);
+                    editor.setLine(from.line, newFromLine);
+
+                    // Remove end marker from last line
+                    const newToLine = toLine.substring(0, to.ch) +
+                                     toLine.substring(to.ch + formatLen);
+                    editor.setLine(to.line, newToLine);
+
+                    // Restore selection
+                    setTimeout(() => {
+                        editor.setSelection(
+                            { line: from.line, ch: from.ch - formatLen },
+                            { line: to.line, ch: to.ch - formatLen }
+                        );
+                    }, 0);
+                }
+            } else {
+                // Format doesn't exist - add it
+                const newFrom = { line: from.line, ch: from.ch + formatLen };
+                const newTo = { line: to.line, ch: to.ch + formatLen };
+
+                editor.replaceSelection(format + selection + format);
+
+                // Restore selection to just the content (without markers)
+                setTimeout(() => {
+                    editor.setSelection(newFrom, newTo);
+                }, 0);
+            }
+        } else {
+            // No selection - check if cursor is inside formatted text
+            const cursor = editor.getCursor();
+            const line = editor.getLine(cursor.line);
+            const formatLen = format.length;
+
+            // Try to find format markers around cursor
+            let removeStart = -1;
+            let removeEnd = -1;
+
+            // Search backwards for opening marker
+            for (let i = cursor.ch - formatLen; i >= 0; i--) {
+                const chunk = line.substring(i, i + formatLen);
+                if (chunk === format) {
+                    // Check if there's a closing marker after cursor
+                    for (let j = cursor.ch; j <= line.length - formatLen; j++) {
+                        const endChunk = line.substring(j, j + formatLen);
+                        if (endChunk === format) {
+                            removeStart = i;
+                            removeEnd = j;
+                            break;
+                        }
+                    }
+                    if (removeStart !== -1) break;
+                }
+            }
+
+            if (removeStart !== -1 && removeEnd !== -1) {
+                // Cursor is inside formatted text - remove markers
+                const newLine = line.substring(0, removeStart) +
+                              line.substring(removeStart + formatLen, removeEnd) +
+                              line.substring(removeEnd + formatLen);
+                editor.setLine(cursor.line, newLine);
+                // Adjust cursor position
+                const newCh = cursor.ch <= removeStart ? cursor.ch :
+                            cursor.ch <= removeEnd ? cursor.ch - formatLen :
+                            cursor.ch - (formatLen * 2);
+                editor.setCursor({ line: cursor.line, ch: newCh });
+            } else {
+                // No formatting found - insert markers at cursor
+                editor.replaceSelection(format + format);
+                const newCursor = editor.getCursor();
+                editor.setCursor({ line: newCursor.line, ch: newCursor.ch - formatLen });
+            }
+        }
+    }
+
+    applyCommentFormat(editor) {
+        const selection = editor.getSelection();
+        const openMarker = '<!-- ';
+        const closeMarker = ' -->';
+
+        if (selection) {
+            // User has selected text
+            const from = editor.getCursor('from');
+            const to = editor.getCursor('to');
+
+            const fromLine = editor.getLine(from.line);
+            const toLine = editor.getLine(to.line);
+
+            // Check if comment markers exist IMMEDIATELY adjacent to the selection
+            const beforeText = fromLine.substring(Math.max(0, from.ch - openMarker.length), from.ch);
+            const afterText = toLine.substring(to.ch, Math.min(toLine.length, to.ch + closeMarker.length));
+
+            if (beforeText === openMarker && afterText === closeMarker) {
+                // Comment exists immediately around selection - remove it
+                if (from.line === to.line) {
+                    // Single line
+                    const newLine = fromLine.substring(0, from.ch - openMarker.length) +
+                                  selection +
+                                  fromLine.substring(to.ch + closeMarker.length);
+                    editor.setLine(from.line, newLine);
+
+                    setTimeout(() => {
+                        editor.setSelection(
+                            { line: from.line, ch: from.ch - openMarker.length },
+                            { line: to.line, ch: to.ch - openMarker.length }
+                        );
+                    }, 0);
+                } else {
+                    // Multi-line
+                    const newFromLine = fromLine.substring(0, from.ch - openMarker.length) +
+                                       fromLine.substring(from.ch);
+                    editor.setLine(from.line, newFromLine);
+
+                    const newToLine = toLine.substring(0, to.ch) +
+                                     toLine.substring(to.ch + closeMarker.length);
+                    editor.setLine(to.line, newToLine);
+
+                    setTimeout(() => {
+                        editor.setSelection(
+                            { line: from.line, ch: from.ch - openMarker.length },
+                            { line: to.line, ch: to.ch - openMarker.length }
+                        );
+                    }, 0);
+                }
+            } else {
+                // Add comment
+                const newFrom = { line: from.line, ch: from.ch + openMarker.length };
+                const newTo = { line: to.line, ch: to.ch + openMarker.length };
+
+                editor.replaceSelection(openMarker + selection + closeMarker);
+
+                setTimeout(() => {
+                    editor.setSelection(newFrom, newTo);
+                }, 0);
+            }
+        } else {
+            // No selection - check if cursor is inside a comment
+            const cursor = editor.getCursor();
+            const line = editor.getLine(cursor.line);
+
+            // Try to find comment markers around cursor
+            let removeStart = -1;
+            let removeEnd = -1;
+
+            // Search for <!-- before cursor
+            const beforeCursor = line.substring(0, cursor.ch);
+            const afterCursor = line.substring(cursor.ch);
+            const openIdx = beforeCursor.lastIndexOf(openMarker);
+            const closeIdx = afterCursor.indexOf(closeMarker);
+
+            if (openIdx !== -1 && closeIdx !== -1) {
+                removeStart = openIdx;
+                removeEnd = cursor.ch + closeIdx;
+                // Remove the markers
+                const newLine = line.substring(0, removeStart) +
+                              line.substring(removeStart + openMarker.length, removeEnd) +
+                              line.substring(removeEnd + closeMarker.length);
+                editor.setLine(cursor.line, newLine);
+                editor.setCursor({ line: cursor.line, ch: cursor.ch - openMarker.length });
+            } else {
+                // Insert comment markers
+                editor.replaceSelection(openMarker + closeMarker);
+                const newCursor = editor.getCursor();
+                editor.setCursor({ line: newCursor.line, ch: newCursor.ch - closeMarker.length });
+            }
+        }
+    }
+
+    applyMathFormat(editor) {
+        const selection = editor.getSelection();
+        // Smart toggle: use $$ if selection contains newlines, else use $
+        const hasNewlines = selection && selection.includes('\n');
+        const format = hasNewlines ? '$$' : '$';
+
+        if (selection) {
+            // User has selected text
+            const from = editor.getCursor('from');
+            const to = editor.getCursor('to');
+
+            const fromLine = editor.getLine(from.line);
+            const toLine = editor.getLine(to.line);
+
+            // Check if math markers exist IMMEDIATELY adjacent to the selection
+            const formatLen = format.length;
+            const beforeText = fromLine.substring(Math.max(0, from.ch - formatLen), from.ch);
+            const afterText = toLine.substring(to.ch, Math.min(toLine.length, to.ch + formatLen));
+
+            if (beforeText === format && afterText === format) {
+                // Math format exists immediately around selection - remove it
+                if (from.line === to.line) {
+                    // Single line
+                    const newLine = fromLine.substring(0, from.ch - formatLen) +
+                                  selection +
+                                  fromLine.substring(to.ch + formatLen);
+                    editor.setLine(from.line, newLine);
+
+                    setTimeout(() => {
+                        editor.setSelection(
+                            { line: from.line, ch: from.ch - formatLen },
+                            { line: to.line, ch: to.ch - formatLen }
+                        );
+                    }, 0);
+                } else {
+                    // Multi-line
+                    const newFromLine = fromLine.substring(0, from.ch - formatLen) +
+                                       fromLine.substring(from.ch);
+                    editor.setLine(from.line, newFromLine);
+
+                    const newToLine = toLine.substring(0, to.ch) +
+                                     toLine.substring(to.ch + formatLen);
+                    editor.setLine(to.line, newToLine);
+
+                    setTimeout(() => {
+                        editor.setSelection(
+                            { line: from.line, ch: from.ch - formatLen },
+                            { line: to.line, ch: to.ch - formatLen }
+                        );
+                    }, 0);
+                }
+            } else {
+                // Add math format
+                const newFrom = { line: from.line, ch: from.ch + formatLen };
+                const newTo = { line: to.line, ch: to.ch + formatLen };
+
+                editor.replaceSelection(format + selection + format);
+
+                setTimeout(() => {
+                    editor.setSelection(newFrom, newTo);
+                }, 0);
+            }
+        } else {
+            // No selection - check if cursor is inside math format
+            const cursor = editor.getCursor();
+            const line = editor.getLine(cursor.line);
+
+            // Try both $ and $$ formats
+            const formats = ['$$', '$'];
+            let removed = false;
+
+            for (const fmt of formats) {
+                const formatLen = fmt.length;
+                let removeStart = -1;
+                let removeEnd = -1;
+
+                // Search backwards for opening marker
+                for (let i = cursor.ch - formatLen; i >= 0; i--) {
+                    const chunk = line.substring(i, i + formatLen);
+                    if (chunk === fmt) {
+                        // Check if there's a closing marker after cursor
+                        for (let j = cursor.ch; j <= line.length - formatLen; j++) {
+                            const endChunk = line.substring(j, j + formatLen);
+                            if (endChunk === fmt) {
+                                removeStart = i;
+                                removeEnd = j;
+                                break;
+                            }
+                        }
+                        if (removeStart !== -1) break;
+                    }
+                }
+
+                if (removeStart !== -1 && removeEnd !== -1) {
+                    // Remove the markers
+                    const newLine = line.substring(0, removeStart) +
+                                  line.substring(removeStart + formatLen, removeEnd) +
+                                  line.substring(removeEnd + formatLen);
+                    editor.setLine(cursor.line, newLine);
+                    const newCh = cursor.ch <= removeStart ? cursor.ch :
+                                cursor.ch <= removeEnd ? cursor.ch - formatLen :
+                                cursor.ch - (formatLen * 2);
+                    editor.setCursor({ line: cursor.line, ch: newCh });
+                    removed = true;
+                    break;
+                }
+            }
+
+            if (!removed) {
+                // No math format found - insert markers
+                const defaultFormat = '$';
+                editor.replaceSelection(defaultFormat + defaultFormat);
+                const newCursor = editor.getCursor();
+                editor.setCursor({ line: newCursor.line, ch: newCursor.ch - defaultFormat.length });
+            }
+        }
+    }
+
+    removeAllToolbars() {
+        const toolbars = document.querySelectorAll('.rtf-toolbar');
+        toolbars.forEach(toolbar => toolbar.remove());
+        this.activeLeaves.clear();
+    }
+}
+
 // Export all core modules
 module.exports = {
     modules: [
@@ -1342,6 +2191,7 @@ module.exports = {
         SmartifyQuotesModule,
         BulkCreateModule,
         DynamicPaddingModule,
-        TitleCaseModule
+        TitleCaseModule,
+        RichTextFormattingModule
     ]
 };

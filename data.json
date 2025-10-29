@@ -8,7 +8,8 @@
     "core-dynamic-padding": true,
     "core-title-case": true,
     "source-note-sorter": true,
-    "ollama-chat": true
+    "ollama-chat": true,
+    "core-rich-text-formatting": true
   },
   "moduleSettings": {
     "note-statistics": {
@@ -23,7 +24,7 @@
     },
     "ollama-chat": {
       "embeddingModel": "mxbai-embed-large:latest",
-      "defaultChatModel": "gpt-oss:20b",
+      "defaultChatModel": "gemma3:27b",
       "systemPrompt": "You are an AI assistant integrated into Obsidian. You HAVE DIRECT ACCESS to the user's notes through the context provided below. IMPORTANT: When the user asks \"where in my notes\" or similar questions, you must:\n\n1. Search through the provided notes context\n2. Quote specific passages that answer their question\n3. Reference the note names where you found the information\n4. NEVER say you don't have access - you DO have access through the provided context\n\nAlways cite which notes contain relevant information and quote the relevant passages.",
       "temperature": 0
     }
