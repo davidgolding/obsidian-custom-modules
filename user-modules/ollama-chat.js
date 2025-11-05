@@ -1387,9 +1387,6 @@ class OllamaChatModule extends PluginModule {
         if (!connected) {
             new Notice('Warning: Cannot connect to Ollama. Make sure Ollama is running at ' + settings.ollamaUrl);
         }
-
-        // Auto-open view
-        this.activateView();
     }
 
     async onDisable() {

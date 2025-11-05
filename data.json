@@ -9,7 +9,7 @@
     "core-title-case": true,
     "source-note-sorter": true,
     "ollama-chat": true,
-    "core-rich-text-formatting": true
+    "core-rich-text-formatting": false
   },
   "moduleSettings": {
     "note-statistics": {
